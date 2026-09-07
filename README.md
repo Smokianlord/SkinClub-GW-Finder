@@ -92,21 +92,3 @@ Use the search field to filter by:
 - Deadline
 
 `Ctrl + F` focuses the search box. Clicking sortable table headers toggles ascending/descending order.
-
-## Known limitations
-
-SkinClub creator pages and public search/source markup can change without notice. If a source changes its HTML structure, discovery or parsing may require an update.
-
-Deep Search depends on third-party public pages being reachable from your network.
-
-## Privacy
-
-The app stores its tracker data locally on your PC. It does not require SkinClub credentials or creator-account credentials.
-
-## Contributing
-
-Bug reports and feature suggestions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
-
-## License
-
-No open-source license is included yet. Unless a license is added by the repository owner, normal copyright rules apply.
