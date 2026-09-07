@@ -1,0 +1,1985 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+namespace SkinClubGiveawayDesktop
+{
+    public class GiveawayItem
+    {
+        public string Creator { get; set; }
+        public string Url { get; set; }
+        public string Status { get; set; }
+        public string Ticket { get; set; }
+        public string Deadline { get; set; }
+        public string LastChecked { get; set; }
+        public string Source { get; set; }
+        public string Error { get; set; }
+        public bool Joined { get; set; }
+        public string JoinedAt { get; set; }
+    }
+
+    public class AppData
+    {
+        public List<GiveawayItem> Items { get; set; }
+        public string LastScan { get; set; }
+        public string LastDeepScan { get; set; }
+
+        public AppData()
+        {
+            Items = new List<GiveawayItem>();
+        }
+    }
+
+    public class Candidate
+    {
+        public string Creator;
+        public string Url;
+        public string Source;
+
+        public Candidate(string creator, string url, string source)
+        {
+            Creator = creator;
+            Url = url;
+            Source = source;
+        }
+    }
+
+    public class ParseResult
+    {
+        public string Status;
+        public string Ticket;
+        public string Deadline;
+        public int? Remaining;
+        public int? Total;
+    }
+
+    public static class DataStore
+    {
+        public static readonly string DataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SkinClub GW Finder");
+        public static readonly string DataFile = Path.Combine(DataDir, "data.json");
+        private static readonly object FileLock = new object();
+
+        public static AppData Load()
+        {
+            Directory.CreateDirectory(DataDir);
+            ImportOldDataIfPresent();
+            if (!File.Exists(DataFile))
+            {
+                AppData initial = DefaultData();
+                Save(initial);
+                return initial;
+            }
+            try
+            {
+                string json = File.ReadAllText(DataFile, Encoding.UTF8);
+                JavaScriptSerializer js = new JavaScriptSerializer();
+                js.MaxJsonLength = int.MaxValue;
+                AppData data = js.Deserialize<AppData>(json);
+                if (data == null) data = DefaultData();
+                if (data.Items == null) data.Items = new List<GiveawayItem>();
+                return data;
+            }
+            catch
+            {
+                AppData fallback = DefaultData();
+                Save(fallback);
+                return fallback;
+            }
+        }
+
+        public static void Save(AppData data)
+        {
+            lock (FileLock)
+            {
+                Directory.CreateDirectory(DataDir);
+                JavaScriptSerializer js = new JavaScriptSerializer();
+                js.MaxJsonLength = int.MaxValue;
+                string json = js.Serialize(data);
+                string temp = DataFile + ".tmp";
+                File.WriteAllText(temp, json, Encoding.UTF8);
+                if (File.Exists(DataFile)) File.Delete(DataFile);
+                File.Move(temp, DataFile);
+            }
+        }
+
+        private static void ImportOldDataIfPresent()
+        {
+            if (File.Exists(DataFile)) return;
+            try
+            {
+                // Migrate data from older builds after the app was renamed.
+                string legacyDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "SkinClub Giveaway Dashboard");
+                string legacyFile = Path.Combine(legacyDir, "data.json");
+                if (File.Exists(legacyFile))
+                {
+                    File.Copy(legacyFile, DataFile, false);
+                    return;
+                }
+
+                string old = Path.Combine(Application.StartupPath, "data.json");
+                if (File.Exists(old)) File.Copy(old, DataFile, false);
+            }
+            catch { }
+        }
+
+        private static AppData DefaultData()
+        {
+            AppData d = new AppData();
+            AddSeed(d, "Jon Sandman", "https://jonsandman.club/010926/");
+            AddSeed(d, "McNasty", "https://mcnasty.club/010826/");
+            AddSeed(d, "Blarg", "https://blarg.club/010826/");
+            AddSeed(d, "ErycTriceps", "https://eryctriceps.club/010826/");
+            AddSeed(d, "Joaco", "https://joaco.club/010826/");
+            return d;
+        }
+
+        private static void AddSeed(AppData d, string creator, string url)
+        {
+            d.Items.Add(new GiveawayItem
+            {
+                Creator = creator,
+                Url = url,
+                Status = "unknown",
+                Ticket = "-",
+                Deadline = "-",
+                Source = "seed"
+            });
+        }
+    }
+
+    public static class Scanner
+    {
+        public static readonly SemaphoreSlim ScanLock = new SemaphoreSlim(1, 1);
+
+        private static readonly Dictionary<string, string> CreatorDomains = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            {"Anomaly", "anomaly.club"}, {"Blarg", "blarg.club"}, {"Bomman", "bomman.club"},
+            {"bysTaXx", "bystaxx.club"}, {"DEVNGUYEN", "devnguyen.club"}, {"DrewUnboxing", "drewunboxing.club"},
+            {"ErycTriceps", "eryctriceps.club"}, {"HaiX", "haix.club"}, {"Jon Sandman", "jonsandman.club"},
+            {"McNasty", "mcnasty.club"}, {"MrTweeday", "mrtweeday.club"}, {"NadeKing", "nadeking.club"},
+            {"RickyWorld", "rickyworld.club"}, {"SAMZ", "samz.club"}, {"shynW", "shynw.club"},
+            {"SwaggerSouls", "swagger.club"}, {"Tarifa", "tarifa.club"}, {"TheSparkles", "thesparkles.club"},
+            {"Tuitenbo", "tuitenbo.club"}, {"Viruzz", "viruzz.club"}, {"Znorux", "znorux.club"},
+            {"THE ASH", "theash.club"}, {"TheDooo", "thedooo.club"}, {"Yumi", "tooyumi.club"},
+            {"Yinger", "yinger.club"}, {"Dona", "thedona.club"}, {"WaffleXD", "wafflecs.club"},
+            {"Kryoz", "kryoz.club"}, {"Python", "thepython.club"}, {"JOISPOI24", "joispoi.club"},
+            {"Joaco", "joaco.club"}
+        };
+
+        private static readonly Dictionary<string, string> DomainCreators = BuildDomainCreators();
+        private static readonly Regex DirectUrlRegex = new Regex(@"https?://(?:www\.)?([a-z0-9-]+\.club)/(\d{6})/?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex VideoIdRegex = new Regex("\"videoId\":\"([A-Za-z0-9_-]{11})\"", RegexOptions.Compiled);
+        // Status parsing is anchored to the giveaway's own ticket/deadline fields.
+        // Generic END/FIN words elsewhere on the page (FAQ, footer, old results,
+        // scripts, etc.) must never move a live giveaway into History.
+        private static readonly Regex TicketLineRegex = new Regex(
+            @"^[ \t]*(?:tickets?[ \t]*(?:left|remaining|restantes)?|tickets?[ \t]+disponibles|bilhetes?[ \t]+(?:restantes|dispon[ií]veis)|v[eé][ \t]*(?:c[oò]n[ \t]+l[aạ]i|con[ \t]+lai))[ \t]*[:\-]?[ \t]*([\d.,]+)[ \t]*/[ \t]*([\d.,]+)[ \t]*$",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+        private static readonly Regex TicketFallbackRegex = new Regex(
+            @"(?:tickets?\s*(?:left|remaining|restantes)?|tickets?\s+disponibles|bilhetes?\s+(?:restantes|dispon[ií]veis)|v[eé]\s*(?:c[oò]n\s+l[aạ]i|con\s+lai))\s*[:\-]?\s*([\d.,]+)\s*/\s*([\d.,]+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex DeadlineLineRegex = new Regex(
+            @"^[ \t]*(?:time[ \t]+to[ \t]+completion|time[ \t]+remaining|tiempo[ \t]+restante|tempo[ \t]+restante|th(?:ờ|o)i[ \t]+gian[ \t]+c(?:ò|o)n[ \t]+l(?:ạ|a)i|deadline|ends?[ \t]+in|ending[ \t]+in)[ \t]*[:\-]?[ \t]*([^\r\n|]{0,80})[ \t]*$",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+        private static readonly Regex ExactEndedValueRegex = new Regex(
+            @"^\s*(?:end|ended|fin|finished|k[eế]t\s*th[uú]c|ket\s*thuc|cerrado|terminado|finalizado|encerrado|conclu[ií]do)\s*[.!]*\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex CountdownUnitRegex = new Regex(
+            @"(\d+(?:[.,]\d+)?)\s*(days?|d[ií]as?|dias?|d|hours?|hrs?|horas?|h|minutes?|mins?|minutos?|m|seconds?|secs?|segundos?|s)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex CountdownClockRegex = new Regex(
+            @"^\s*(?:(\d+)\s*[: ]\s*)?(\d{1,2}):(\d{2}):(\d{2})\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex HiddenAbsoluteDeadlineRegex = new Regex(
+            @"(?:end(?:[-_ ]?(?:date|time|at))?|endsAt|endDate|deadline|expires?(?:[-_ ]?(?:date|time|at))?|finish(?:[-_ ]?(?:date|time|at))?|data-end(?:[-_](?:date|time|at))?)\s*[^0-9]{0,18}([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]+)?(?:Z|[+\-][0-9]{2}:?[0-9]{2})?)?)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex HiddenUnixDeadlineRegex = new Regex(
+            @"(?:end(?:[-_ ]?(?:time|at))?|deadline|expires?(?:[-_ ]?(?:time|at))?|finish(?:[-_ ]?(?:time|at))?|data-end(?:[-_](?:time|at))?)\s*[^0-9]{0,18}([0-9]{10,13})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex RemainingSecondsRegex = new Regex(
+            @"(?:timeRemaining|remainingTime|secondsLeft|seconds_left|time_left|timeLeft)\s*[^0-9]{0,18}([0-9]{1,8})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+
+        private static readonly HttpClient Client = MakeClient();
+
+        private static Dictionary<string, string> BuildDomainCreators()
+        {
+            Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, string> kv in CreatorDomains) map[kv.Value] = kv.Key;
+            return map;
+        }
+
+        private static HttpClient MakeClient()
+        {
+            ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
+            ServicePointManager.DefaultConnectionLimit = 40;
+            HttpClientHandler h = new HttpClientHandler();
+            h.AllowAutoRedirect = true;
+            h.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            HttpClient c = new HttpClient(h);
+            c.Timeout = TimeSpan.FromSeconds(8);
+            c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36");
+            c.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+            return c;
+        }
+
+        public static string InferCreator(string url, string fallback)
+        {
+            try
+            {
+                Uri u = new Uri(url);
+                string host = u.Host.ToLowerInvariant();
+                if (host.StartsWith("www.")) host = host.Substring(4);
+                string creator;
+                if (DomainCreators.TryGetValue(host, out creator)) return creator;
+                if (!string.IsNullOrWhiteSpace(fallback)) return fallback;
+                string stem = host.Split('.')[0].Replace('-', ' ').Replace('_', ' ');
+                if (stem.Length == 0) return "Unknown";
+                return System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(stem);
+            }
+            catch { return string.IsNullOrWhiteSpace(fallback) ? "Unknown" : fallback; }
+        }
+
+        private static string NormalizeDiscoveryHtml(string s)
+        {
+            if (s == null) return "";
+            return s.Replace("\\u002F", "/").Replace("\\u002f", "/")
+                    .Replace("\\u003A", ":").Replace("\\u003a", ":")
+                    .Replace("\\/", "/").Replace("&amp;", "&");
+        }
+
+        private static List<Candidate> ExtractDirectUrls(string raw, string source)
+        {
+            List<Candidate> list = new List<Candidate>();
+            string normalized = NormalizeDiscoveryHtml(raw);
+            MatchCollection matches = DirectUrlRegex.Matches(normalized);
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in matches)
+            {
+                string url = m.Value;
+                if (!url.EndsWith("/")) url += "/";
+                if (!seen.Add(url.TrimEnd('/'))) continue;
+                list.Add(new Candidate(InferCreator(url, null), url, source));
+            }
+            return list;
+        }
+
+        private static string HtmlToText(string html)
+        {
+            if (string.IsNullOrEmpty(html)) return "";
+            string s = Regex.Replace(html, @"<(?:br|/p|/div|/li|/tr|/h[1-6])\b[^>]*>", "\n", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<script\b[^>]*>.*?</script>", " ", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            s = Regex.Replace(s, @"<style\b[^>]*>.*?</style>", " ", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            s = Regex.Replace(s, @"<[^>]+>", " ");
+            s = WebUtility.HtmlDecode(s);
+            s = s.Replace("\r", "");
+            s = Regex.Replace(s, @"[ \t]+", " ");
+            s = Regex.Replace(s, @"\n\s*\n+", "\n");
+            return s.Trim();
+        }
+
+        private static int? ParseInt(string s)
+        {
+            if (s == null) return null;
+            string digits = Regex.Replace(s, "[^0-9]", "");
+            int v;
+            if (int.TryParse(digits, out v)) return v;
+            return null;
+        }
+
+        private static bool TryParseCountdown(string raw, out TimeSpan span)
+        {
+            span = TimeSpan.Zero;
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+
+            string s = raw.Trim().ToLowerInvariant();
+            double totalSeconds = 0;
+            bool found = false;
+
+            MatchCollection units = CountdownUnitRegex.Matches(s);
+            foreach (Match m in units)
+            {
+                double value;
+                string number = (m.Groups[1].Value ?? "").Replace(',', '.');
+                if (!double.TryParse(number, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value)) continue;
+                string unit = (m.Groups[2].Value ?? "").ToLowerInvariant();
+
+                if (unit.StartsWith("d") && unit != "dias" && unit != "dia" && unit != "días" && unit != "día")
+                    totalSeconds += value * 86400.0;
+                else if (unit.StartsWith("day") || unit == "dia" || unit == "dias" || unit == "día" || unit == "días" || unit == "d")
+                    totalSeconds += value * 86400.0;
+                else if (unit.StartsWith("h") || unit.StartsWith("hora"))
+                    totalSeconds += value * 3600.0;
+                else if (unit.StartsWith("m") || unit.StartsWith("min"))
+                    totalSeconds += value * 60.0;
+                else if (unit.StartsWith("s") || unit.StartsWith("seg"))
+                    totalSeconds += value;
+                found = true;
+            }
+
+            // Common countdown forms: HH:MM:SS or DD:HH:MM:SS.
+            string withoutUnits = CountdownUnitRegex.Replace(s, " ").Trim();
+            Match clock = CountdownClockRegex.Match(withoutUnits);
+            if (clock.Success)
+            {
+                int a = 0, b = 0, c = 0, d = 0;
+                if (clock.Groups[1].Success)
+                {
+                    int.TryParse(clock.Groups[1].Value, out a);
+                    int.TryParse(clock.Groups[2].Value, out b);
+                    int.TryParse(clock.Groups[3].Value, out c);
+                    int.TryParse(clock.Groups[4].Value, out d);
+                    totalSeconds += a * 86400.0 + b * 3600.0 + c * 60.0 + d;
+                }
+                else
+                {
+                    int.TryParse(clock.Groups[2].Value, out b);
+                    int.TryParse(clock.Groups[3].Value, out c);
+                    int.TryParse(clock.Groups[4].Value, out d);
+                    totalSeconds += b * 3600.0 + c * 60.0 + d;
+                }
+                found = true;
+            }
+
+            if (!found || totalSeconds < 0) return false;
+            span = TimeSpan.FromSeconds(totalSeconds);
+            return true;
+        }
+
+        private static string AbsoluteDeadlineFromHtml(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html)) return "-";
+
+            Match iso = HiddenAbsoluteDeadlineRegex.Match(html);
+            if (iso.Success)
+            {
+                DateTime dt;
+                string raw = WebUtility.HtmlDecode(iso.Groups[1].Value ?? "");
+                if (DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AllowWhiteSpaces | System.Globalization.DateTimeStyles.AssumeLocal, out dt) ||
+                    DateTime.TryParse(raw, out dt))
+                {
+                    if (dt.Date >= DateTime.Now.Date.AddDays(-1))
+                        return dt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+                }
+            }
+
+            Match unix = HiddenUnixDeadlineRegex.Match(html);
+            if (unix.Success)
+            {
+                long stamp;
+                if (long.TryParse(unix.Groups[1].Value, out stamp))
+                {
+                    if (stamp > 9999999999L) stamp /= 1000L;
+                    try
+                    {
+                        DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                        DateTime dt = epoch.AddSeconds(stamp).ToLocalTime();
+                        if (dt.Year >= DateTime.Now.Year - 1 && dt.Year <= DateTime.Now.Year + 5 && dt.Date >= DateTime.Now.Date.AddDays(-1))
+                            return dt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+                    }
+                    catch { }
+                }
+            }
+
+            Match seconds = RemainingSecondsRegex.Match(html);
+            if (seconds.Success)
+            {
+                int sec;
+                if (int.TryParse(seconds.Groups[1].Value, out sec) && sec > 0)
+                {
+                    DateTime dt = DateTime.Now.AddSeconds(sec);
+                    return dt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+                }
+            }
+
+            return "-";
+        }
+
+        private static string DeadlineAsDate(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "-";
+            string value = Regex.Replace(raw, @"\s+", " ").Trim().Trim(' ', ':', '|');
+            if (value == "" || value == "-") return "-";
+
+            TimeSpan countdown;
+            if (TryParseCountdown(value, out countdown))
+            {
+                DateTime end = DateTime.Now.Add(countdown);
+                return end.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+            }
+
+            DateTime absolute;
+            if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AllowWhiteSpaces | System.Globalization.DateTimeStyles.AssumeLocal, out absolute) ||
+                DateTime.TryParse(value, out absolute))
+            {
+                return absolute.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+            }
+
+            // The visible field can be a live timer format we do not recognize yet.
+            // Keep the giveaway Active, but do not show the raw timer in the Deadline column.
+            return "-";
+        }
+
+        public static ParseResult ParsePage(string html)
+        {
+            string text = HtmlToText(html);
+
+            int? remaining = null;
+            int? total = null;
+            Match tm = TicketLineRegex.Match(text);
+            if (!tm.Success) tm = TicketFallbackRegex.Match(text);
+            if (tm.Success)
+            {
+                remaining = ParseInt(tm.Groups[1].Value);
+                total = ParseInt(tm.Groups[2].Value);
+            }
+            string ticket = (remaining.HasValue && total.HasValue)
+                ? string.Format("{0} / {1}", remaining.Value, total.Value)
+                : "-";
+
+            string deadline = AbsoluteDeadlineFromHtml(html);
+            bool explicitEnded = false;
+            bool hasLiveDeadlineSignal = deadline != "-";
+            MatchCollection deadlineMatches = DeadlineLineRegex.Matches(text);
+            foreach (Match dm in deadlineMatches)
+            {
+                string raw = Regex.Replace(dm.Groups[1].Value ?? "", @"\s+", " ").Trim();
+                string display = raw.Trim(' ', ':', '|');
+
+                // A bare dash means the giveaway is live but the site does not expose a deadline.
+                if (display == "" || display == "-") continue;
+
+                if (ExactEndedValueRegex.IsMatch(display))
+                {
+                    explicitEnded = true;
+                    deadline = "Ended";
+                    break;
+                }
+
+                // Any non-ended value in the dedicated countdown/deadline field is
+                // enough to treat the page as live. The UI stores only a DATE.
+                hasLiveDeadlineSignal = true;
+                if (deadline == "-") deadline = DeadlineAsDate(display);
+            }
+
+            bool soldOut = remaining.HasValue && remaining.Value <= 0;
+            bool hasTickets = remaining.HasValue && remaining.Value > 0;
+
+            string status;
+            if (explicitEnded || soldOut) status = "ended";
+            else if (hasTickets || hasLiveDeadlineSignal) status = "active";
+            else status = "unknown";
+
+            return new ParseResult
+            {
+                Status = status,
+                Ticket = ticket,
+                Deadline = explicitEnded ? "Ended" : deadline,
+                Remaining = remaining,
+                Total = total
+            };
+        }
+
+        public static async Task<GiveawayItem> ValidateAsync(Candidate c, SemaphoreSlim throttle)
+        {
+            await throttle.WaitAsync();
+            try
+            {
+                GiveawayItem item = new GiveawayItem
+                {
+                    Creator = InferCreator(c.Url, c.Creator), Url = c.Url, Status = "unknown", Ticket = "-", Deadline = "-",
+                    LastChecked = DateTime.UtcNow.ToString("o"), Source = c.Source, Error = null
+                };
+                try
+                {
+                    HttpResponseMessage r = await Client.GetAsync(c.Url);
+                    item.Url = r.RequestMessage.RequestUri.ToString();
+                    if (!r.IsSuccessStatusCode)
+                    {
+                        item.Error = "HTTP " + (int)r.StatusCode;
+                        return item;
+                    }
+                    string html = await r.Content.ReadAsStringAsync();
+                    ParseResult p = ParsePage(html);
+                    item.Status = p.Status;
+                    item.Ticket = p.Ticket;
+                    item.Deadline = p.Deadline;
+                    return item;
+                }
+                catch (Exception ex)
+                {
+                    item.Error = ex.Message.Length > 160 ? ex.Message.Substring(0, 160) : ex.Message;
+                    return item;
+                }
+            }
+            finally { throttle.Release(); }
+        }
+
+        private static void MergeItems(AppData data, IEnumerable<GiveawayItem> updates)
+        {
+            Dictionary<string, GiveawayItem> byUrl = new Dictionary<string, GiveawayItem>(StringComparer.OrdinalIgnoreCase);
+            foreach (GiveawayItem i in data.Items)
+            {
+                if (i.Url != null) byUrl[i.Url.TrimEnd('/')] = i;
+            }
+            foreach (GiveawayItem u in updates)
+            {
+                string key = (u.Url ?? "").TrimEnd('/');
+                GiveawayItem existing;
+                if (byUrl.TryGetValue(key, out existing))
+                {
+                    // A failed/ambiguous check must not move an already-known giveaway
+                    // out of Active or History. Only a successful active/ended parse may
+                    // change its classification.
+                    if (u.Status == "unknown" &&
+                        (string.Equals(existing.Status, "active", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(existing.Status, "ended", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        existing.LastChecked = u.LastChecked;
+                        existing.Error = u.Error;
+                        if (!string.IsNullOrWhiteSpace(u.Source)) existing.Source = u.Source;
+                    }
+                    else
+                    {
+                        existing.Creator = u.Creator; existing.Url = u.Url; existing.Status = u.Status;
+                        existing.Ticket = u.Ticket; existing.Deadline = u.Deadline; existing.LastChecked = u.LastChecked;
+                        existing.Source = u.Source; existing.Error = u.Error;
+                    }
+                }
+                else
+                {
+                    data.Items.Add(u);
+                    byUrl[key] = u;
+                }
+            }
+        }
+
+        public static async Task<AppData> RefreshSavedAsync(AppData data)
+        {
+            await ScanLock.WaitAsync();
+            try
+            {
+                List<Candidate> cs = new List<Candidate>();
+                foreach (GiveawayItem i in data.Items)
+                    cs.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
+                SemaphoreSlim throttle = new SemaphoreSlim(20, 20);
+                List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
+                foreach (Candidate c in cs) tasks.Add(ValidateAsync(c, throttle));
+                GiveawayItem[] updates = tasks.Count == 0 ? new GiveawayItem[0] : await Task.WhenAll(tasks);
+                MergeItems(data, updates);
+                data.LastScan = DateTime.UtcNow.ToString("o");
+                DataStore.Save(data);
+                return data;
+            }
+            finally { ScanLock.Release(); }
+        }
+
+        private static List<Candidate> GeneratedCandidates()
+        {
+            List<Candidate> list = new List<Candidate>();
+            DateTime month = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+            for (int monthOffset = 0; monthOffset < 4; monthOffset++)
+            {
+                DateTime d = month.AddMonths(-monthOffset);
+                foreach (KeyValuePair<string, string> kv in CreatorDomains)
+                {
+                    for (int prefix = 1; prefix <= 12; prefix++)
+                    {
+                        string slug = string.Format("{0:00}{1:00}{2:00}", prefix, d.Month, d.Year % 100);
+                        list.Add(new Candidate(kv.Key, "https://" + kv.Value + "/" + slug + "/", "domain-probe"));
+                    }
+                }
+            }
+            return list;
+        }
+
+        private static async Task<string> GetStringSafeAsync(string url)
+        {
+            try
+            {
+                HttpResponseMessage r = await Client.GetAsync(url);
+                if (!r.IsSuccessStatusCode) return "";
+                return await r.Content.ReadAsStringAsync();
+            }
+            catch { return ""; }
+        }
+
+        private static async Task<List<Candidate>> DiscoverTelegramAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            string[] channels = new string[] { "skinclubcreatorsgiveaway" };
+            foreach (string channel in channels)
+            {
+                string raw = await GetStringSafeAsync("https://t.me/s/" + channel);
+                found.AddRange(ExtractDirectUrls(raw, "telegram:" + channel));
+            }
+            return found;
+        }
+
+        private static async Task<List<Candidate>> DiscoverYoutubeAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            HashSet<string> videoIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string[] queries = new string[]
+            {
+                "skinclub giveaway", "skinclub cs2 giveaway", "skinclub partner giveaway", "skinclub .club giveaway"
+            };
+            foreach (string q in queries)
+            {
+                string url = "https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q);
+                string raw = await GetStringSafeAsync(url);
+                found.AddRange(ExtractDirectUrls(raw, "youtube-search"));
+                MatchCollection ids = VideoIdRegex.Matches(raw);
+                foreach (Match m in ids)
+                {
+                    if (videoIds.Count >= 50) break;
+                    videoIds.Add(m.Groups[1].Value);
+                }
+            }
+
+            SemaphoreSlim sem = new SemaphoreSlim(8, 8);
+            List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
+            foreach (string id in videoIds.Take(50))
+            {
+                tasks.Add(Task.Run(async delegate
+                {
+                    await sem.WaitAsync();
+                    try
+                    {
+                        string raw = await GetStringSafeAsync("https://www.youtube.com/watch?v=" + id);
+                        return ExtractDirectUrls(raw, "youtube-description");
+                    }
+                    finally { sem.Release(); }
+                }));
+            }
+            if (tasks.Count > 0)
+            {
+                List<Candidate>[] batches = await Task.WhenAll(tasks);
+                foreach (List<Candidate> batch in batches) found.AddRange(batch);
+            }
+            return found;
+        }
+
+        private static async Task<List<Candidate>> DiscoverWebAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            DateTime now = DateTime.Now;
+            string monthSlug = string.Format("01{0:00}{1:00}", now.Month, now.Year % 100);
+            string[] queries = new string[]
+            {
+                "SkinClub giveaway .club/" + monthSlug,
+                "SkinClub Tickets left .club giveaway",
+                "SkinClub Time to completion .club"
+            };
+            foreach (string q in queries)
+            {
+                string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=50";
+                string raw = await GetStringSafeAsync(bing);
+                found.AddRange(ExtractDirectUrls(raw, "web-search"));
+            }
+            return found;
+        }
+
+        public static async Task<AppData> DeepScanAsync(AppData data)
+        {
+            await ScanLock.WaitAsync();
+            try
+            {
+                Task<List<Candidate>> telegram = DiscoverTelegramAsync();
+                Task<List<Candidate>> youtube = DiscoverYoutubeAsync();
+                Task<List<Candidate>> web = DiscoverWebAsync();
+
+                List<Candidate> candidates = GeneratedCandidates();
+                candidates.AddRange(await telegram);
+                candidates.AddRange(await youtube);
+                candidates.AddRange(await web);
+                foreach (GiveawayItem i in data.Items)
+                    candidates.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
+
+                Dictionary<string, Candidate> dedup = new Dictionary<string, Candidate>(StringComparer.OrdinalIgnoreCase);
+                foreach (Candidate c in candidates)
+                {
+                    if (string.IsNullOrWhiteSpace(c.Url)) continue;
+                    dedup[c.Url.TrimEnd('/')] = c;
+                }
+                candidates = dedup.Values.ToList();
+                HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return (x.Url ?? "").TrimEnd('/'); }), StringComparer.OrdinalIgnoreCase);
+
+                List<GiveawayItem> useful = new List<GiveawayItem>();
+                SemaphoreSlim throttle = new SemaphoreSlim(28, 28);
+                const int chunkSize = 180;
+                for (int start = 0; start < candidates.Count; start += chunkSize)
+                {
+                    List<Candidate> batch = candidates.Skip(start).Take(chunkSize).ToList();
+                    List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
+                    foreach (Candidate c in batch) tasks.Add(ValidateAsync(c, throttle));
+                    GiveawayItem[] updates = await Task.WhenAll(tasks);
+                    foreach (GiveawayItem u in updates)
+                    {
+                        string key = (u.Url ?? "").TrimEnd('/');
+                        if (u.Status == "active" || u.Status == "ended" || known.Contains(key)) useful.Add(u);
+                    }
+                }
+                MergeItems(data, useful);
+                data.LastScan = DateTime.UtcNow.ToString("o");
+                data.LastDeepScan = data.LastScan;
+                DataStore.Save(data);
+                return data;
+            }
+            finally { ScanLock.Release(); }
+        }
+
+        public static async Task<GiveawayItem> ValidateOneAsync(string creator, string url)
+        {
+            if (!DirectUrlRegex.IsMatch(url)) throw new ArgumentException("Use a direct dated creator giveaway URL, for example https://creator.club/010926/");
+            SemaphoreSlim throttle = new SemaphoreSlim(1, 1);
+            return await ValidateAsync(new Candidate(creator, url, "manual"), throttle);
+        }
+
+        public static void MergeOne(AppData data, GiveawayItem item)
+        {
+            MergeItems(data, new GiveawayItem[] { item });
+            DataStore.Save(data);
+        }
+    }
+
+    public class AddLinkForm : Form
+    {
+        public string CreatorName { get { return creatorBox.Text.Trim(); } }
+        public string GiveawayUrl { get { return urlBox.Text.Trim(); } }
+        private TextBox creatorBox;
+        private TextBox urlBox;
+
+        private readonly Color Bg = Color.FromArgb(20, 28, 45);
+        private readonly Color Card = Color.FromArgb(34, 45, 68);
+        private readonly Color Line = Color.FromArgb(75, 91, 124);
+        private readonly Color TextColor = Color.FromArgb(246, 249, 255);
+        private readonly Color Muted = Color.FromArgb(174, 190, 216);
+        private readonly Color Accent = Color.FromArgb(132, 102, 255);
+
+        public AddLinkForm()
+        {
+            Text = "Add giveaway";
+            Width = 620;
+            Height = 300;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Bg;
+            ForeColor = TextColor;
+            Font = new Font("Segoe UI", 9F);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            Panel accent = new Panel();
+            accent.Dock = DockStyle.Top;
+            accent.Height = 4;
+            accent.BackColor = Accent;
+            Controls.Add(accent);
+
+            Label title = new Label();
+            title.Text = "Add giveaway link";
+            title.Left = 24;
+            title.Top = 24;
+            title.Width = 430;
+            title.Height = 32;
+            title.Font = new Font("Segoe UI Semibold", 16F);
+            title.ForeColor = TextColor;
+            Controls.Add(title);
+
+            Label sub = new Label();
+            sub.Text = "Paste a direct dated creator giveaway URL. The page will be validated before it is saved.";
+            sub.Left = 25;
+            sub.Top = 59;
+            sub.Width = 550;
+            sub.Height = 34;
+            sub.ForeColor = Muted;
+            Controls.Add(sub);
+
+            Label l1 = MakeLabel("Creator (optional)", 25, 102, 200);
+            creatorBox = MakeTextBox(25, 124, 550);
+            Label l2 = MakeLabel("Direct giveaway URL", 25, 158, 200);
+            urlBox = MakeTextBox(25, 180, 550);
+            urlBox.Text = "https://creator.club/010926/";
+
+            Button cancel = MakeButton("Cancel", 375, 222, 92, false);
+            cancel.DialogResult = DialogResult.Cancel;
+            Button add = MakeButton("Validate + Add", 475, 222, 100, true);
+            add.DialogResult = DialogResult.OK;
+
+            Controls.Add(l1);
+            Controls.Add(creatorBox);
+            Controls.Add(l2);
+            Controls.Add(urlBox);
+            Controls.Add(cancel);
+            Controls.Add(add);
+            AcceptButton = add;
+            CancelButton = cancel;
+        }
+
+        private Label MakeLabel(string text, int x, int y, int w)
+        {
+            Label l = new Label();
+            l.Text = text;
+            l.Left = x;
+            l.Top = y;
+            l.Width = w;
+            l.Height = 20;
+            l.ForeColor = Muted;
+            l.Font = new Font("Segoe UI Semibold", 8.5F);
+            return l;
+        }
+
+        private TextBox MakeTextBox(int x, int y, int w)
+        {
+            TextBox t = new TextBox();
+            t.Left = x;
+            t.Top = y;
+            t.Width = w;
+            t.Height = 28;
+            t.BackColor = Card;
+            t.ForeColor = TextColor;
+            t.BorderStyle = BorderStyle.FixedSingle;
+            return t;
+        }
+
+        private Button MakeButton(string text, int x, int y, int w, bool primary)
+        {
+            Button b = new Button();
+            b.Text = text;
+            b.Left = x;
+            b.Top = y;
+            b.Width = w;
+            b.Height = 36;
+            b.FlatStyle = FlatStyle.Popup;
+            b.UseVisualStyleBackColor = false;
+            b.BackColor = primary ? Accent : Card;
+            b.ForeColor = TextColor;
+            b.Font = new Font("Segoe UI Semibold", 9F);
+            b.FlatAppearance.BorderColor = primary ? Accent : Line;
+            b.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(126, 110, 255) : Color.FromArgb(25, 32, 46);
+            b.FlatAppearance.MouseDownBackColor = primary ? Color.FromArgb(96, 78, 235) : Color.FromArgb(20, 26, 38);
+            return b;
+        }
+    }
+
+    public class DepthButton : Button
+    {
+        public Color TopColor { get; set; }
+        public Color BottomColor { get; set; }
+        public Color BorderColor3D { get; set; }
+        private bool hover;
+        private bool pressed;
+
+        public DepthButton()
+        {
+            TopColor = Color.FromArgb(42, 55, 82);
+            BottomColor = Color.FromArgb(25, 34, 54);
+            BorderColor3D = Color.FromArgb(71, 88, 123);
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            UseVisualStyleBackColor = false;
+            Cursor = Cursors.Hand;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs mevent) { if (mevent.Button == MouseButtons.Left) pressed = true; Invalidate(); base.OnMouseDown(mevent); }
+        protected override void OnMouseUp(MouseEventArgs mevent) { pressed = false; Invalidate(); base.OnMouseUp(mevent); }
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+
+        private static Color Blend(Color a, Color b, double amount)
+        {
+            if (amount < 0) amount = 0;
+            if (amount > 1) amount = 1;
+            return Color.FromArgb(
+                (int)Math.Round(a.R * (1.0 - amount) + b.R * amount),
+                (int)Math.Round(a.G * (1.0 - amount) + b.G * amount),
+                (int)Math.Round(a.B * (1.0 - amount) + b.B * amount));
+        }
+
+        private static GraphicsPath RoundedRect(Rectangle r, int radius)
+        {
+            GraphicsPath path = new GraphicsPath();
+            int d = Math.Max(2, radius * 2);
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Parent == null ? BackColor : Parent.BackColor);
+
+            Rectangle shadowRect = new Rectangle(2, 5, Math.Max(1, Width - 5), Math.Max(1, Height - 7));
+            using (GraphicsPath shadowPath = RoundedRect(shadowRect, 6))
+            using (SolidBrush shadow = new SolidBrush(Color.FromArgb(95, 0, 0, 0)))
+                g.FillPath(shadow, shadowPath);
+
+            int y = pressed ? 3 : 1;
+            Rectangle face = new Rectangle(1, y, Math.Max(1, Width - 4), Math.Max(1, Height - 7));
+            Color top = TopColor;
+            Color bottom = BottomColor;
+            if (hover && Enabled)
+            {
+                top = Blend(top, Color.White, 0.10);
+                bottom = Blend(bottom, Color.White, 0.05);
+            }
+            if (!Enabled)
+            {
+                top = Blend(top, Color.FromArgb(80, 84, 94), 0.55);
+                bottom = Blend(bottom, Color.FromArgb(58, 62, 72), 0.55);
+            }
+
+            using (GraphicsPath facePath = RoundedRect(face, 6))
+            using (LinearGradientBrush fill = new LinearGradientBrush(face, top, bottom, LinearGradientMode.Vertical))
+            using (Pen border = new Pen(Enabled ? BorderColor3D : Blend(BorderColor3D, Color.Gray, 0.55)))
+            {
+                g.FillPath(fill, facePath);
+                g.DrawPath(border, facePath);
+            }
+
+            // Thin top highlight + lower edge create real depth without looking glossy/toy-like.
+            using (Pen hi = new Pen(Color.FromArgb(pressed ? 35 : 85, 255, 255, 255)))
+                g.DrawLine(hi, 8, face.Top + 1, Math.Max(8, Width - 11), face.Top + 1);
+            using (Pen low = new Pen(Color.FromArgb(70, 0, 0, 0)))
+                g.DrawLine(low, 8, face.Bottom - 1, Math.Max(8, Width - 11), face.Bottom - 1);
+
+            Color text = Enabled ? ForeColor : Color.FromArgb(145, 153, 168);
+            TextRenderer.DrawText(g, Text, Font, face, text,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    public class MainForm : Form
+    {
+        private AppData data;
+        private DataGridView grid;
+        private Button historyButton;
+        private Button joinedButton;
+        private Button refreshButton;
+        private Button deepButton;
+        private Button addButton;
+        private Label activeCount;
+        private Label historyCount;
+        private Label joinedCount;
+        private Label lastCheck;
+        private Label viewTitle;
+        private Label viewSubtitle;
+        private Label scanStatus;
+        private TextBox filterBox;
+        private ComboBox filterFieldBox;
+        private TableLayoutPanel cardPanelRef;
+        private TableLayoutPanel cardHeaderPanel;
+        private TableLayoutPanel titlePanelRef;
+        private TableLayoutPanel filterPanelRef;
+        private Panel activityBarRef;
+        private Panel viewAccentRef;
+        private bool showingHistory = false;
+        private bool showingJoined = false;
+        private bool scanning = false;
+        private System.Windows.Forms.Timer autoTimer;
+        private string sortColumn = "Creator";
+        private bool sortAscending = true;
+
+        // Restrained product-dashboard palette: neutral ink surfaces with precise accent usage.
+        private readonly Color Bg = Color.FromArgb(9, 14, 25);
+        private readonly Color Surface = Color.FromArgb(17, 24, 39);
+        private readonly Color Surface2 = Color.FromArgb(13, 20, 34);
+        private readonly Color Surface3 = Color.FromArgb(27, 37, 56);
+        private readonly Color Line = Color.FromArgb(43, 55, 78);
+        private readonly Color TextColor = Color.FromArgb(244, 247, 252);
+        private readonly Color Muted = Color.FromArgb(145, 158, 181);
+        private readonly Color Accent = Color.FromArgb(112, 104, 255);
+        private readonly Color Accent2 = Color.FromArgb(56, 189, 248);
+        private readonly Color Success = Color.FromArgb(45, 212, 191);
+        private readonly Color Warning = Color.FromArgb(251, 191, 36);
+        private readonly Color Danger = Color.FromArgb(251, 113, 133);
+        private readonly Color ActiveView = Color.FromArgb(45, 212, 191);
+        private readonly Color HistoryView = Color.FromArgb(245, 158, 11);
+        private readonly Color JoinedView = Color.FromArgb(167, 139, 250);
+        private readonly Color ButtonTop = Color.FromArgb(43, 55, 82);
+        private readonly Color ButtonBottom = Color.FromArgb(24, 33, 52);
+        private readonly Color ButtonBorder = Color.FromArgb(66, 82, 112);
+
+        public MainForm()
+        {
+            Text = "SkinClub GW Finder";
+            Width = 1240;
+            Height = 800;
+            MinimumSize = new Size(1040, 680);
+            StartPosition = FormStartPosition.CenterScreen;
+            BackColor = Bg;
+            ForeColor = TextColor;
+            Font = new Font("Segoe UI", 9F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            KeyPreview = true;
+            KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.Control && e.KeyCode == Keys.F && filterBox != null)
+                {
+                    filterBox.Focus();
+                    filterBox.SelectAll();
+                    e.SuppressKeyPress = true;
+                }
+            };
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            data = DataStore.Load();
+            RepairLegacyStatuses();
+            BuildUi();
+            Render();
+
+            Shown += async delegate { await RefreshAsync(false); };
+            autoTimer = new System.Windows.Forms.Timer();
+            autoTimer.Interval = 10 * 60 * 1000;
+            autoTimer.Tick += async delegate { if (!scanning) await RefreshAsync(false); };
+            autoTimer.Start();
+        }
+
+        private void RepairLegacyStatuses()
+        {
+            bool changed = false;
+            foreach (GiveawayItem i in data.Items)
+            {
+                if (!string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.Equals((i.Deadline ?? "").Trim(), "Ended", StringComparison.OrdinalIgnoreCase)) continue;
+                Match m = Regex.Match(i.Ticket ?? "", @"^\s*([0-9,]+)\s*/\s*([0-9,]+)\s*$");
+                if (!m.Success) continue;
+                int remaining;
+                if (!int.TryParse(m.Groups[1].Value.Replace(",", ""), out remaining)) continue;
+                if (remaining <= 0) continue;
+                i.Status = "unknown";
+                i.Deadline = "-";
+                changed = true;
+            }
+            if (changed) DataStore.Save(data);
+        }
+
+        private void BuildUi()
+        {
+            SuspendLayout();
+
+            TableLayoutPanel root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.BackColor = Bg;
+            root.Padding = new Padding(22, 18, 22, 22);
+            root.ColumnCount = 1;
+            root.RowCount = 4;
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            Controls.Add(root);
+
+            // Brand header
+            TableLayoutPanel header = new TableLayoutPanel();
+            header.Dock = DockStyle.Fill;
+            header.Margin = new Padding(0, 0, 0, 12);
+            header.BackColor = Color.FromArgb(14, 21, 36);
+            header.ColumnCount = 2;
+            header.RowCount = 1;
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48F));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52F));
+            header.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.Controls.Add(header, 0, 0);
+
+            Panel brand = new Panel();
+            brand.Dock = DockStyle.Fill;
+            brand.BackColor = Color.FromArgb(14, 21, 36);
+            brand.Padding = new Padding(18, 15, 8, 12);
+            header.Controls.Add(brand, 0, 0);
+
+            PictureBox logo = new PictureBox();
+            logo.Left = 18;
+            logo.Top = 17;
+            logo.Width = 54;
+            logo.Height = 54;
+            logo.SizeMode = PictureBoxSizeMode.Zoom;
+            try { logo.Image = Icon.ExtractAssociatedIcon(Application.ExecutablePath).ToBitmap(); } catch { }
+            brand.Controls.Add(logo);
+
+            Label title = new Label();
+            title.Text = "SkinClub GW Finder";
+            title.Left = 86;
+            title.Top = 17;
+            title.Width = 470;
+            title.Height = 34;
+            title.Font = new Font("Segoe UI Semibold", 20F);
+            title.ForeColor = TextColor;
+            brand.Controls.Add(title);
+
+            Label sub = new Label();
+            sub.Text = "Live creator giveaway monitor  •  Active pages are verified automatically";
+            sub.Left = 88;
+            sub.Top = 56;
+            sub.Width = 520;
+            sub.Height = 24;
+            sub.ForeColor = Muted;
+            sub.Font = new Font("Segoe UI", 9F);
+            brand.Controls.Add(sub);
+
+            Panel brandAccent = new Panel();
+            brandAccent.Dock = DockStyle.Left;
+            brandAccent.Width = 4;
+            brandAccent.BackColor = Accent;
+            brand.Controls.Add(brandAccent);
+            brandAccent.BringToFront();
+
+            FlowLayoutPanel actions = new FlowLayoutPanel();
+            actions.Dock = DockStyle.Fill;
+            actions.Padding = new Padding(8, 26, 16, 0);
+            actions.FlowDirection = FlowDirection.RightToLeft;
+            actions.WrapContents = false;
+            actions.BackColor = Color.FromArgb(14, 21, 36);
+            header.Controls.Add(actions, 1, 0);
+
+            deepButton = MakeHeaderButton("Deep Search", 116, true);
+            refreshButton = MakeHeaderButton("Refresh", 84, false);
+            historyButton = MakeHeaderButton("History", 84, false);
+            joinedButton = MakeHeaderButton("Joined", 82, false);
+            addButton = MakeHeaderButton("+ Add link", 92, false);
+            actions.Controls.Add(deepButton);
+            actions.Controls.Add(refreshButton);
+            actions.Controls.Add(historyButton);
+            actions.Controls.Add(joinedButton);
+            actions.Controls.Add(addButton);
+
+            addButton.Click += async delegate { await AddLinkAsync(); };
+            historyButton.Click += delegate
+            {
+                if (showingHistory) showingHistory = false;
+                else { showingHistory = true; showingJoined = false; }
+                Render();
+            };
+            joinedButton.Click += delegate
+            {
+                if (showingJoined) showingJoined = false;
+                else { showingJoined = true; showingHistory = false; }
+                Render();
+            };
+            refreshButton.Click += async delegate { await RefreshAsync(true); };
+            deepButton.Click += async delegate { await DeepSearchAsync(); };
+
+            // Status / stats row
+            TableLayoutPanel toolbar = new TableLayoutPanel();
+            toolbar.Dock = DockStyle.Fill;
+            toolbar.Margin = new Padding(0, 0, 0, 12);
+            toolbar.BackColor = Bg;
+            toolbar.ColumnCount = 1;
+            toolbar.RowCount = 1;
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.Controls.Add(toolbar, 0, 1);
+
+            FlowLayoutPanel stats = new FlowLayoutPanel();
+            stats.Dock = DockStyle.Fill;
+            stats.FlowDirection = FlowDirection.LeftToRight;
+            stats.WrapContents = false;
+            stats.BackColor = Bg;
+            toolbar.Controls.Add(stats, 0, 0);
+
+            activeCount = MakeStatLabel("ACTIVE  0", 118, Success);
+            historyCount = MakeStatLabel("HISTORY  0", 126, Muted);
+            joinedCount = MakeStatLabel("JOINED  0", 118, Accent);
+            lastCheck = MakeStatLabel("LAST CHECK  NEVER", 222, Accent2);
+            stats.Controls.Add(activeCount);
+            stats.Controls.Add(historyCount);
+            stats.Controls.Add(joinedCount);
+            stats.Controls.Add(lastCheck);
+
+            // Dedicated activity/search-status row. Keeping this outside the table/card
+            // prevents DPI scaling or docking from clipping long search messages.
+            Panel activityBar = new Panel();
+            activityBarRef = activityBar;
+            activityBar.Dock = DockStyle.Fill;
+            activityBar.Margin = new Padding(0, 0, 0, 8);
+            activityBar.Padding = new Padding(12, 0, 12, 0);
+            activityBar.BackColor = Color.FromArgb(12, 19, 32);
+            root.Controls.Add(activityBar, 0, 2);
+
+            scanStatus = new Label();
+            scanStatus.Dock = DockStyle.Fill;
+            scanStatus.ForeColor = Warning;
+            scanStatus.Font = new Font("Segoe UI Semibold", 9F);
+            scanStatus.TextAlign = ContentAlignment.MiddleLeft;
+            scanStatus.AutoEllipsis = true;
+            scanStatus.Text = "Ready";
+            activityBar.Controls.Add(scanStatus);
+
+            // Main card
+            TableLayoutPanel card = new TableLayoutPanel();
+            cardPanelRef = card;
+            card.Dock = DockStyle.Fill;
+            card.Margin = new Padding(0);
+            card.Padding = new Padding(1);
+            card.BackColor = Line;
+            card.ColumnCount = 1;
+            card.RowCount = 3;
+            card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            // Give the section header enough room at common Windows DPI scales.
+            // The labels inside it use a layout panel below instead of absolute Y positions,
+            // so helper text can never slide underneath the grid.
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 68F));
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 3F));
+            card.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.Controls.Add(card, 0, 3);
+
+            TableLayoutPanel cardHeader = new TableLayoutPanel();
+            cardHeaderPanel = cardHeader;
+            cardHeader.Dock = DockStyle.Fill;
+            cardHeader.BackColor = Surface;
+            cardHeader.ColumnCount = 2;
+            cardHeader.RowCount = 1;
+            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58F));
+            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42F));
+            card.Controls.Add(cardHeader, 0, 0);
+
+            TableLayoutPanel titlePanel = new TableLayoutPanel();
+            titlePanelRef = titlePanel;
+            titlePanel.Dock = DockStyle.Fill;
+            titlePanel.Margin = new Padding(0);
+            titlePanel.Padding = new Padding(16, 7, 8, 6);
+            titlePanel.BackColor = Surface;
+            titlePanel.ColumnCount = 1;
+            titlePanel.RowCount = 2;
+            titlePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            titlePanel.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
+            titlePanel.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
+            cardHeader.Controls.Add(titlePanel, 0, 0);
+
+            viewTitle = new Label();
+            viewTitle.Text = "Active giveaways";
+            viewTitle.Dock = DockStyle.Fill;
+            viewTitle.Margin = new Padding(0);
+            viewTitle.Font = new Font("Segoe UI Semibold", 11.5F);
+            viewTitle.ForeColor = TextColor;
+            viewTitle.TextAlign = ContentAlignment.MiddleLeft;
+            viewTitle.AutoEllipsis = true;
+            titlePanel.Controls.Add(viewTitle, 0, 0);
+
+            viewSubtitle = new Label();
+            viewSubtitle.Text = "Click a column header to sort";
+            viewSubtitle.Dock = DockStyle.Fill;
+            viewSubtitle.Margin = new Padding(0);
+            viewSubtitle.ForeColor = Muted;
+            viewSubtitle.Font = new Font("Segoe UI", 8.5F);
+            viewSubtitle.TextAlign = ContentAlignment.MiddleLeft;
+            viewSubtitle.AutoEllipsis = true;
+            titlePanel.Controls.Add(viewSubtitle, 0, 1);
+
+            TableLayoutPanel filterPanel = new TableLayoutPanel();
+            filterPanelRef = filterPanel;
+            filterPanel.Dock = DockStyle.Fill;
+            filterPanel.Margin = new Padding(0);
+            filterPanel.Padding = new Padding(8, 15, 16, 14);
+            filterPanel.BackColor = Surface;
+            filterPanel.ColumnCount = 3;
+            filterPanel.RowCount = 1;
+            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54F));
+            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 122F));
+            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            cardHeader.Controls.Add(filterPanel, 1, 0);
+
+            Panel viewAccent = new Panel();
+            viewAccentRef = viewAccent;
+            viewAccent.Dock = DockStyle.Fill;
+            viewAccent.Margin = new Padding(0);
+            viewAccent.BackColor = ActiveView;
+            card.Controls.Add(viewAccent, 0, 1);
+
+
+            Label filterLabel = new Label();
+            filterLabel.Text = "SEARCH";
+            filterLabel.Dock = DockStyle.Fill;
+            filterLabel.Margin = new Padding(0);
+            filterLabel.ForeColor = Muted;
+            filterLabel.Font = new Font("Segoe UI Semibold", 8F);
+            filterLabel.TextAlign = ContentAlignment.MiddleLeft;
+            filterPanel.Controls.Add(filterLabel, 0, 0);
+
+            filterFieldBox = new ComboBox();
+            filterFieldBox.Dock = DockStyle.Fill;
+            filterFieldBox.Margin = new Padding(0, 1, 8, 1);
+            filterFieldBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            filterFieldBox.FlatStyle = FlatStyle.Flat;
+            filterFieldBox.BackColor = Surface3;
+            filterFieldBox.ForeColor = TextColor;
+            filterFieldBox.Font = new Font("Segoe UI", 8.7F);
+            filterFieldBox.Items.AddRange(new object[] { "Creator name", "All fields", "URL", "Ticket", "Deadline" });
+            filterFieldBox.SelectedIndex = 0;
+            filterFieldBox.SelectedIndexChanged += delegate { if (grid != null) Render(); };
+            filterPanel.Controls.Add(filterFieldBox, 1, 0);
+
+            filterBox = new TextBox();
+            filterBox.Dock = DockStyle.Fill;
+            filterBox.Margin = new Padding(0, 2, 0, 2);
+            filterBox.BorderStyle = BorderStyle.FixedSingle;
+            filterBox.BackColor = Surface3;
+            filterBox.ForeColor = TextColor;
+            filterBox.Font = new Font("Segoe UI", 9F);
+            filterBox.TextChanged += delegate { if (grid != null) Render(); };
+            filterBox.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Escape && filterBox.TextLength > 0)
+                {
+                    filterBox.Clear();
+                    e.SuppressKeyPress = true;
+                }
+            };
+            filterPanel.Controls.Add(filterBox, 2, 0);
+
+            grid = new DataGridView();
+            grid.Dock = DockStyle.Fill;
+            grid.Margin = new Padding(0);
+            grid.BackgroundColor = Surface2;
+            grid.BorderStyle = BorderStyle.None;
+            grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+            grid.GridColor = Line;
+            grid.RowHeadersVisible = false;
+            grid.AllowUserToAddRows = false;
+            grid.AllowUserToDeleteRows = false;
+            grid.AllowUserToResizeRows = false;
+            grid.AllowUserToOrderColumns = false;
+            grid.MultiSelect = false;
+            grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            grid.ReadOnly = true;
+            grid.EnableHeadersVisualStyles = false;
+            grid.ColumnHeadersVisible = true;
+            grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+            grid.ColumnHeadersHeight = 46;
+            grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(18, 27, 43);
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(183, 195, 216);
+            grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 8.5F);
+            grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
+            grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 0, 0, 0);
+            grid.DefaultCellStyle.BackColor = Surface2;
+            grid.DefaultCellStyle.ForeColor = TextColor;
+            grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(34, 47, 72);
+            grid.DefaultCellStyle.SelectionForeColor = TextColor;
+            grid.DefaultCellStyle.Font = new Font("Segoe UI", 9.5F);
+            grid.DefaultCellStyle.Padding = new Padding(8, 0, 8, 0);
+            grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(16, 24, 39);
+            grid.RowTemplate.Height = 52;
+            grid.AutoGenerateColumns = false;
+
+            DataGridViewTextBoxColumn creator = new DataGridViewTextBoxColumn();
+            creator.Name = "Creator";
+            creator.HeaderText = "CREATOR";
+            creator.Width = 185;
+            creator.MinimumWidth = 145;
+            creator.SortMode = DataGridViewColumnSortMode.Programmatic;
+
+            DataGridViewLinkColumn link = new DataGridViewLinkColumn();
+            link.Name = "Link";
+            link.HeaderText = "LINK";
+            link.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            link.MinimumWidth = 280;
+            link.LinkColor = Color.FromArgb(125, 211, 252);
+            link.ActiveLinkColor = Color.White;
+            link.VisitedLinkColor = Color.FromArgb(125, 211, 252);
+            link.TrackVisitedState = false;
+            link.SortMode = DataGridViewColumnSortMode.Programmatic;
+
+            DataGridViewTextBoxColumn ticket = new DataGridViewTextBoxColumn();
+            ticket.Name = "Ticket";
+            ticket.HeaderText = "TICKET";
+            ticket.Width = 130;
+            ticket.SortMode = DataGridViewColumnSortMode.Programmatic;
+            ticket.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
+
+            DataGridViewTextBoxColumn deadline = new DataGridViewTextBoxColumn();
+            deadline.Name = "Deadline";
+            deadline.HeaderText = "DEADLINE";
+            deadline.Width = 150;
+            deadline.SortMode = DataGridViewColumnSortMode.Programmatic;
+
+            DataGridViewButtonColumn copy = new DataGridViewButtonColumn();
+            copy.Name = "Copy";
+            copy.HeaderText = "";
+            copy.Text = "Copy";
+            copy.UseColumnTextForButtonValue = true;
+            copy.Width = 72;
+            copy.FlatStyle = FlatStyle.Flat;
+            copy.SortMode = DataGridViewColumnSortMode.NotSortable;
+            copy.DefaultCellStyle.BackColor = Surface3;
+            copy.DefaultCellStyle.ForeColor = TextColor;
+            copy.DefaultCellStyle.SelectionBackColor = Surface3;
+            copy.DefaultCellStyle.SelectionForeColor = TextColor;
+            copy.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+
+            DataGridViewButtonColumn joinedAction = new DataGridViewButtonColumn();
+            joinedAction.Name = "JoinedAction";
+            joinedAction.HeaderText = "";
+            joinedAction.Width = 82;
+            joinedAction.FlatStyle = FlatStyle.Flat;
+            joinedAction.SortMode = DataGridViewColumnSortMode.NotSortable;
+            joinedAction.DefaultCellStyle.BackColor = Surface3;
+            joinedAction.DefaultCellStyle.ForeColor = TextColor;
+            joinedAction.DefaultCellStyle.SelectionBackColor = Surface3;
+            joinedAction.DefaultCellStyle.SelectionForeColor = TextColor;
+            joinedAction.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+
+            grid.Columns.AddRange(new DataGridViewColumn[] { creator, link, ticket, deadline, copy, joinedAction });
+            grid.CellContentClick += GridCellContentClick;
+            grid.CellPainting += GridCellPainting;
+            grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
+            card.Controls.Add(grid, 0, 2);
+
+            ResumeLayout(true);
+        }
+
+        private Button MakeHeaderButton(string text, int width, bool emphasis)
+        {
+            DepthButton b = new DepthButton();
+            b.Text = text;
+            b.Width = width;
+            b.Height = 40;
+            b.Margin = new Padding(6, 0, 0, 0);
+            b.ForeColor = TextColor;
+            b.Font = new Font("Segoe UI Semibold", 9F);
+            if (emphasis)
+            {
+                b.TopColor = Color.FromArgb(126, 112, 255);
+                b.BottomColor = Color.FromArgb(86, 72, 215);
+                b.BorderColor3D = Color.FromArgb(155, 145, 255);
+            }
+            else
+            {
+                b.TopColor = ButtonTop;
+                b.BottomColor = ButtonBottom;
+                b.BorderColor3D = ButtonBorder;
+            }
+            return b;
+        }
+
+        private void SetDepthButtonTheme(Button button, Color accent, bool selected)
+        {
+            DepthButton b = button as DepthButton;
+            if (b == null) return;
+            if (selected)
+            {
+                b.TopColor = MixColor(Surface3, accent, 0.62);
+                b.BottomColor = MixColor(Bg, accent, 0.30);
+                b.BorderColor3D = MixColor(accent, Color.White, 0.14);
+            }
+            else
+            {
+                b.TopColor = ButtonTop;
+                b.BottomColor = ButtonBottom;
+                b.BorderColor3D = ButtonBorder;
+            }
+            b.Invalidate();
+        }
+
+        private Color MixColor(Color baseColor, Color accent, double amount)
+        {
+            if (amount < 0) amount = 0;
+            if (amount > 1) amount = 1;
+            int r = (int)Math.Round(baseColor.R * (1.0 - amount) + accent.R * amount);
+            int g = (int)Math.Round(baseColor.G * (1.0 - amount) + accent.G * amount);
+            int b = (int)Math.Round(baseColor.B * (1.0 - amount) + accent.B * amount);
+            return Color.FromArgb(r, g, b);
+        }
+
+        private Label MakeStatLabel(string text, int width, Color accent)
+        {
+            Label l = new Label();
+            l.Width = width;
+            l.Height = 38;
+            l.Margin = new Padding(0, 7, 10, 0);
+            l.Text = text;
+            l.ForeColor = Color.White;
+            l.BackColor = MixColor(Surface, accent, 0.14);
+            l.BorderStyle = BorderStyle.None;
+            l.TextAlign = ContentAlignment.MiddleCenter;
+            l.Font = new Font("Segoe UI Semibold", 8.5F);
+            return l;
+        }
+
+        private void GridColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (e.ColumnIndex < 0) return;
+            DataGridViewColumn c = grid.Columns[e.ColumnIndex];
+            if (c.SortMode == DataGridViewColumnSortMode.NotSortable || c.Name == "Copy" || c.Name == "JoinedAction") return;
+
+            if (string.Equals(sortColumn, c.Name, StringComparison.OrdinalIgnoreCase))
+                sortAscending = !sortAscending;
+            else
+            {
+                sortColumn = c.Name;
+                sortAscending = true;
+            }
+            Render();
+        }
+
+        private void GridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            string name = grid.Columns[e.ColumnIndex].Name;
+            if (name != "Copy" && name != "JoinedAction") return;
+
+            e.PaintBackground(e.CellBounds, true);
+            string text = Convert.ToString(e.FormattedValue) ?? "";
+            Color accent = name == "Copy" ? Accent2 : (showingJoined ? Danger : Success);
+
+            Rectangle r = new Rectangle(e.CellBounds.X + 8, e.CellBounds.Y + 9,
+                Math.Max(20, e.CellBounds.Width - 16), Math.Max(20, e.CellBounds.Height - 18));
+            Rectangle shadow = new Rectangle(r.X + 1, r.Y + 3, r.Width, Math.Max(1, r.Height - 1));
+            using (GraphicsPath shadowPath = MakeRoundedPath(shadow, 5))
+            using (SolidBrush sb = new SolidBrush(Color.FromArgb(85, 0, 0, 0)))
+                e.Graphics.FillPath(sb, shadowPath);
+
+            Color top = MixColor(Surface3, accent, 0.55);
+            Color bottom = MixColor(Bg, accent, 0.25);
+            using (GraphicsPath path = MakeRoundedPath(r, 5))
+            using (LinearGradientBrush fill = new LinearGradientBrush(r, top, bottom, LinearGradientMode.Vertical))
+            using (Pen border = new Pen(MixColor(accent, Color.White, 0.08)))
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(border, path);
+            }
+            using (Pen hi = new Pen(Color.FromArgb(65, 255, 255, 255)))
+                e.Graphics.DrawLine(hi, r.Left + 6, r.Top + 1, r.Right - 6, r.Top + 1);
+
+            TextRenderer.DrawText(e.Graphics, text, new Font("Segoe UI Semibold", 8.2F), r, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            e.Handled = true;
+        }
+
+        private GraphicsPath MakeRoundedPath(Rectangle r, int radius)
+        {
+            GraphicsPath path = new GraphicsPath();
+            int d = Math.Max(2, radius * 2);
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        private void GridCellContentClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+            GiveawayItem item = grid.Rows[e.RowIndex].Tag as GiveawayItem;
+            string url = Convert.ToString(grid.Rows[e.RowIndex].Cells["Link"].Value);
+
+            if (e.ColumnIndex == grid.Columns["JoinedAction"].Index)
+            {
+                if (item == null) return;
+                if (showingJoined)
+                {
+                    item.Joined = false;
+                    item.JoinedAt = null;
+                    DataStore.Save(data);
+                    scanStatus.Text = "Removed from Joined";
+                    scanStatus.ForeColor = Muted;
+                    Render();
+                }
+                else if (!item.Joined)
+                {
+                    item.Joined = true;
+                    item.JoinedAt = DateTime.UtcNow.ToString("o");
+                    DataStore.Save(data);
+                    scanStatus.Text = "Saved to Joined";
+                    scanStatus.ForeColor = Success;
+                    Render();
+                }
+                else
+                {
+                    scanStatus.Text = "Already saved to Joined";
+                    scanStatus.ForeColor = Muted;
+                }
+                return;
+            }
+
+            if (e.ColumnIndex == grid.Columns["Copy"].Index)
+            {
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    Clipboard.SetText(url);
+                    scanStatus.Text = "Link copied to clipboard";
+                    scanStatus.ForeColor = Success;
+                    Task.Delay(1400).ContinueWith(delegate
+                    {
+                        try { BeginInvoke(new Action(delegate { if (!scanning) { scanStatus.Text = "Ready"; scanStatus.ForeColor = Muted; } })); }
+                        catch { }
+                    });
+                }
+            }
+            else if (e.ColumnIndex == grid.Columns["Link"].Index && !string.IsNullOrWhiteSpace(url))
+            {
+                try { Process.Start(url); } catch { }
+            }
+        }
+
+        private List<GiveawayItem> CurrentItems()
+        {
+            List<GiveawayItem> list;
+            if (showingJoined)
+            {
+                list = data.Items.Where(delegate(GiveawayItem i) { return i.Joined; }).ToList();
+            }
+            else
+            {
+                string wanted = showingHistory ? "ended" : "active";
+                list = data.Items.Where(delegate(GiveawayItem i)
+                {
+                    // A joined giveaway is exclusive to Joined. Removing it from Joined simply
+                    // exposes it again in the tab dictated by its preserved real status.
+                    if (i.Joined) return false;
+                    return string.Equals(i.Status, wanted, StringComparison.OrdinalIgnoreCase);
+                }).ToList();
+            }
+
+            string query = filterBox == null ? "" : (filterBox.Text ?? "").Trim();
+            if (query.Length > 0)
+            {
+                string field = filterFieldBox == null || filterFieldBox.SelectedItem == null
+                    ? "Creator name"
+                    : filterFieldBox.SelectedItem.ToString();
+
+                list = list.Where(delegate(GiveawayItem i)
+                {
+                    if (string.Equals(field, "Creator name", StringComparison.OrdinalIgnoreCase))
+                        return (i.Creator ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (string.Equals(field, "URL", StringComparison.OrdinalIgnoreCase))
+                        return (i.Url ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (string.Equals(field, "Ticket", StringComparison.OrdinalIgnoreCase))
+                        return (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (string.Equals(field, "Deadline", StringComparison.OrdinalIgnoreCase))
+                        return (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    return (i.Creator ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           (i.Url ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                }).ToList();
+            }
+
+            list.Sort(CompareItems);
+            return list;
+        }
+
+        private int CompareItems(GiveawayItem a, GiveawayItem b)
+        {
+            int cmp = 0;
+            if (string.Equals(sortColumn, "Ticket", StringComparison.OrdinalIgnoreCase))
+            {
+                long ar, at, br, bt;
+                bool ah = TryTicketNumbers(a.Ticket, out ar, out at);
+                bool bh = TryTicketNumbers(b.Ticket, out br, out bt);
+                if (ah != bh) return ah ? -1 : 1;
+                if (ah && bh)
+                {
+                    cmp = ar.CompareTo(br);
+                    if (cmp == 0) cmp = at.CompareTo(bt);
+                }
+            }
+            else if (string.Equals(sortColumn, "Deadline", StringComparison.OrdinalIgnoreCase))
+            {
+                DateTime ad, bd;
+                bool ah = TryDeadlineDate(a, out ad);
+                bool bh = TryDeadlineDate(b, out bd);
+                if (ah != bh) return ah ? -1 : 1;
+                if (ah && bh) cmp = ad.CompareTo(bd);
+            }
+            else if (string.Equals(sortColumn, "Link", StringComparison.OrdinalIgnoreCase))
+            {
+                cmp = string.Compare(a.Url ?? "", b.Url ?? "", StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                cmp = string.Compare(a.Creator ?? "", b.Creator ?? "", StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (cmp == 0)
+                cmp = string.Compare(a.Creator ?? "", b.Creator ?? "", StringComparison.OrdinalIgnoreCase);
+            return sortAscending ? cmp : -cmp;
+        }
+
+        private bool TryTicketNumbers(string value, out long remaining, out long total)
+        {
+            remaining = 0;
+            total = 0;
+            Match m = Regex.Match(value ?? "", @"^\s*([0-9,\.]+)\s*/\s*([0-9,\.]+)\s*$");
+            if (!m.Success) return false;
+            string a = m.Groups[1].Value.Replace(",", "").Replace(".", "");
+            string b = m.Groups[2].Value.Replace(",", "").Replace(".", "");
+            return long.TryParse(a, out remaining) && long.TryParse(b, out total);
+        }
+
+        private bool TryDeadlineDate(GiveawayItem item, out DateTime value)
+        {
+            value = DateTime.MinValue;
+            string raw = item == null ? "" : (item.Deadline ?? "").Trim();
+            if (!string.IsNullOrWhiteSpace(raw) && raw != "-" && !string.Equals(raw, "Ended", StringComparison.OrdinalIgnoreCase))
+            {
+                DateTime parsed;
+                if (DateTime.TryParse(raw, out parsed))
+                {
+                    value = parsed.Date;
+                    return true;
+                }
+            }
+            if ((showingHistory || (showingJoined && item != null && string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase))) &&
+                item != null && !string.IsNullOrWhiteSpace(item.LastChecked))
+            {
+                DateTime checkedAt;
+                if (DateTime.TryParse(item.LastChecked, out checkedAt))
+                {
+                    value = checkedAt.ToLocalTime();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void ApplyViewTheme()
+        {
+            Color accent = showingJoined ? JoinedView : (showingHistory ? HistoryView : ActiveView);
+            // Each tab has its own subtle hue, but the saturation is intentionally low so the
+            // UI reads like a production desktop dashboard rather than three brightly painted pages.
+            Color viewHeader = MixColor(Surface, accent, showingJoined ? 0.105 : 0.085);
+            Color viewTable = MixColor(Surface2, accent, showingJoined ? 0.070 : 0.055);
+            Color viewAlt = MixColor(Color.FromArgb(16, 24, 39), accent, showingJoined ? 0.085 : 0.070);
+
+            if (cardPanelRef != null) cardPanelRef.BackColor = MixColor(Line, accent, 0.28);
+            if (cardHeaderPanel != null) cardHeaderPanel.BackColor = viewHeader;
+            if (titlePanelRef != null) titlePanelRef.BackColor = viewHeader;
+            if (filterPanelRef != null) filterPanelRef.BackColor = viewHeader;
+            if (activityBarRef != null) activityBarRef.BackColor = MixColor(Color.FromArgb(12, 19, 32), accent, 0.035);
+            if (viewAccentRef != null) viewAccentRef.BackColor = accent;
+
+            if (grid != null)
+            {
+                grid.BackgroundColor = viewTable;
+                grid.DefaultCellStyle.BackColor = viewTable;
+                grid.AlternatingRowsDefaultCellStyle.BackColor = viewAlt;
+                grid.DefaultCellStyle.SelectionBackColor = MixColor(Color.FromArgb(31, 43, 65), accent, 0.22);
+                grid.ColumnHeadersDefaultCellStyle.BackColor = MixColor(Color.FromArgb(18, 27, 43), accent, 0.075);
+            }
+
+            SetDepthButtonTheme(historyButton, HistoryView, showingHistory);
+            SetDepthButtonTheme(joinedButton, JoinedView, showingJoined);
+            viewTitle.ForeColor = accent;
+        }
+
+        private void Render()
+        {
+            int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
+            int hc = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
+            int jc = data.Items.Count(delegate(GiveawayItem i) { return i.Joined; });
+            activeCount.Text = "ACTIVE  " + ac;
+            historyCount.Text = "HISTORY  " + hc;
+            joinedCount.Text = "JOINED  " + jc;
+            lastCheck.Text = "LAST CHECK  " + FormatTime(data.LastScan);
+
+            historyButton.Text = showingHistory ? "← Active" : "History";
+            joinedButton.Text = showingJoined ? "← Active" : "Joined";
+
+            if (showingJoined)
+            {
+                viewTitle.Text = "Joined giveaways";
+                viewSubtitle.Text = "Only joined giveaways appear here • REMOVE returns each item to its Active or History list";
+            }
+            else if (showingHistory)
+            {
+                viewTitle.Text = "Giveaway history";
+                viewSubtitle.Text = "Ended giveaways are retained here with their original links";
+            }
+            else
+            {
+                viewTitle.Text = "Active giveaways";
+                viewSubtitle.Text = "Verified running giveaways you have not joined yet • click a column header to sort";
+            }
+
+            ApplyViewTheme();
+
+            grid.SuspendLayout();
+            grid.Rows.Clear();
+            foreach (GiveawayItem i in CurrentItems())
+            {
+                bool ended = string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase);
+                string deadline = i.Deadline ?? "-";
+                if ((showingHistory || showingJoined) && ended && (string.IsNullOrWhiteSpace(deadline) || deadline == "-")) deadline = "ENDED";
+                if (!string.IsNullOrWhiteSpace(deadline) && deadline != "-") deadline = deadline.ToUpperInvariant();
+                string actionText = showingJoined ? "REMOVE" : "JOIN";
+                int row = grid.Rows.Add(i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", deadline, "COPY", actionText);
+                grid.Rows[row].Tag = i;
+                grid.Rows[row].Cells["Creator"].Style.Font = new Font("Segoe UI Semibold", 9.4F);
+                grid.Rows[row].Cells["Ticket"].Style.Font = new Font("Segoe UI Semibold", 9.2F);
+
+                bool activeLike = string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase);
+                grid.Rows[row].Cells["Ticket"].Style.ForeColor = activeLike ? Success : Muted;
+                grid.Rows[row].Cells["Deadline"].Style.ForeColor = ended ? Muted : Color.FromArgb(205, 215, 231);
+                if (ended) grid.Rows[row].DefaultCellStyle.ForeColor = Color.FromArgb(183, 193, 208);
+
+                long remaining, total;
+                if (activeLike && TryTicketNumbers(i.Ticket, out remaining, out total) && total > 0)
+                {
+                    double ratio = (double)remaining / (double)total;
+                    if (remaining <= 100 || ratio <= 0.15) grid.Rows[row].Cells["Ticket"].Style.ForeColor = Warning;
+                }
+
+                DateTime due;
+                if (activeLike && TryDeadlineDate(i, out due))
+                {
+                    double days = (due.Date - DateTime.Now.Date).TotalDays;
+                    if (days >= 0 && days <= 2) grid.Rows[row].Cells["Deadline"].Style.ForeColor = Warning;
+                }
+
+                grid.Rows[row].Cells["Copy"].Style.BackColor = MixColor(Surface3, Accent2, 0.12);
+                grid.Rows[row].Cells["Copy"].Style.ForeColor = Color.White;
+                grid.Rows[row].Cells["Copy"].Style.SelectionBackColor = MixColor(Surface3, Accent2, 0.18);
+
+                if (showingJoined)
+                {
+                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Danger, 0.12);
+                    grid.Rows[row].Cells["JoinedAction"].Style.ForeColor = Color.White;
+                    grid.Rows[row].Cells["JoinedAction"].Style.SelectionBackColor = MixColor(Surface3, Danger, 0.18);
+                }
+                else
+                {
+                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Success, 0.12);
+                    grid.Rows[row].Cells["JoinedAction"].Style.ForeColor = Color.White;
+                    grid.Rows[row].Cells["JoinedAction"].Style.SelectionBackColor = MixColor(Surface3, Success, 0.18);
+                }
+            }
+            UpdateSortGlyph();
+            grid.ResumeLayout();
+        }
+
+        private void UpdateSortGlyph()
+        {
+            foreach (DataGridViewColumn c in grid.Columns)
+                c.HeaderCell.SortGlyphDirection = SortOrder.None;
+            if (grid.Columns.Contains(sortColumn))
+                grid.Columns[sortColumn].HeaderCell.SortGlyphDirection = sortAscending ? SortOrder.Ascending : SortOrder.Descending;
+        }
+
+        private string FormatTime(string iso)
+        {
+            if (string.IsNullOrWhiteSpace(iso)) return "NEVER";
+            DateTime dt;
+            if (DateTime.TryParse(iso, out dt))
+                return dt.ToLocalTime().ToString("MMM d, h:mm tt", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+            return "NEVER";
+        }
+
+        private void SetScanning(bool value, string message)
+        {
+            scanning = value;
+            refreshButton.Enabled = !value;
+            deepButton.Enabled = !value;
+            addButton.Enabled = !value;
+            historyButton.Enabled = !value;
+            joinedButton.Enabled = !value;
+            scanStatus.Text = value ? message : "Ready";
+            scanStatus.ForeColor = value ? Warning : Muted;
+            Cursor = value ? Cursors.WaitCursor : Cursors.Default;
+        }
+
+        private async Task RefreshAsync(bool manual)
+        {
+            if (scanning) return;
+            SetScanning(true, manual ? "Checking saved giveaway pages..." : "Refreshing live status...");
+            try
+            {
+                data = await Scanner.RefreshSavedAsync(data);
+                Render();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Refresh failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { SetScanning(false, ""); }
+        }
+
+        private async Task DeepSearchAsync()
+        {
+            if (scanning) return;
+            SetScanning(true, "Deep searching YouTube, Telegram and partner sites...");
+            try
+            {
+                data = await Scanner.DeepScanAsync(data);
+                Render();
+                int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
+                scanStatus.Text = "Deep Search complete  •  " + ac + " active giveaway" + (ac == 1 ? "" : "s");
+                scanStatus.ForeColor = Success;
+                await Task.Delay(2200);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Deep Search failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { SetScanning(false, ""); }
+        }
+
+        private async Task AddLinkAsync()
+        {
+            using (AddLinkForm f = new AddLinkForm())
+            {
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                if (string.IsNullOrWhiteSpace(f.GiveawayUrl)) return;
+                SetScanning(true, "Validating giveaway page...");
+                try
+                {
+                    GiveawayItem item = await Scanner.ValidateOneAsync(f.CreatorName, f.GiveawayUrl);
+                    Scanner.MergeOne(data, item);
+                    Render();
+                    if (item.Status == "active")
+                        MessageBox.Show(this, "Running giveaway added to Active.", "Added", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    else if (item.Status == "ended")
+                        MessageBox.Show(this, "This giveaway is ended, so it was saved in History.", "Saved to History", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    else
+                        MessageBox.Show(this, "The page was saved, but it could not be verified as active or ended yet.", "Unverified", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, "Invalid link", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                finally { SetScanning(false, ""); }
+            }
+        }
+    }
+
+    static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
+        }
+    }
+}

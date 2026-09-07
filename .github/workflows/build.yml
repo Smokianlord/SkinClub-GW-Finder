@@ -1,0 +1,54 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $csc)) {
+            $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+          }
+          if (-not (Test-Path $csc)) {
+            throw "The .NET Framework C# compiler was not found."
+          }
+
+          & $csc `
+            /nologo `
+            /codepage:65001 `
+            /target:winexe `
+            /optimize+ `
+            /win32icon:"SkinClubGWFinder.ico" `
+            /out:"SkinClubGWFinder.exe" `
+            /reference:System.dll `
+            /reference:System.Core.dll `
+            /reference:System.Drawing.dll `
+            /reference:System.Windows.Forms.dll `
+            /reference:System.Net.Http.dll `
+            /reference:System.Web.Extensions.dll `
+            Program.cs
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkinClub-GW-Finder-Windows
+          path: |
+            SkinClubGWFinder.exe
+            SkinClubGWFinder.ico
+            README.md

@@ -1,0 +1,31 @@
+# Build outputs
+*.exe
+*.pdb
+*.dll
+bin/
+obj/
+
+# Local app data / temporary files
+data.json
+*.tmp
+
+# Visual Studio / IDE
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
