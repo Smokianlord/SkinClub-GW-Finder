@@ -19,5 +19,3 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 - **Copy and open actions** for direct giveaway links.
 - **Automatic refresh** every 10 minutes, plus manual Refresh.
 - **Persistent local data** between launches.
-- **Migration support** for data created by older builds.
-- **Compact status UI** with a polished dark desktop design and view-specific accents.
