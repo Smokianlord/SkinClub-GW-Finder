@@ -7,6 +7,8 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -215,9 +217,28 @@ namespace SkinClubGiveawayDesktop
         private static readonly Regex RemainingSecondsRegex = new Regex(
             @"(?:timeRemaining|remainingTime|secondsLeft|seconds_left|time_left|timeLeft)\s*[^0-9]{0,18}([0-9]{1,8})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
+        private static readonly Regex RemainingHoursRegex = new Regex(
+            @"(?:hoursRemaining|remainingHours|hoursLeft|hours_left|remaining_hours|timeToCompletionHours|time_to_completion_hours|hoursToCompletion|completionHours|completion_hours|timeToCompletion|time_to_completion|remainingTimeHours|timeRemainingHours|hoursUntilEnd|hours_until_end|hoursToEnd|hours_to_end|endInHours|end_in_hours)\s*[""']?\s*[:=]\s*[""']?\s*([0-9]+(?:[.,][0-9]+)?)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex RemainingHoursNearLabelRegex = new Regex(
+            @"(?:time\s*to\s*completion|time\s*remaining|remaining\s*time|ends?\s*in|deadline|completion)[^0-9]{0,120}([0-9]+(?:[.,][0-9]+)?)\s*(?:hours?|hrs?|hr|h)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+        private static readonly Regex RemainingBareHoursNearLabelRegex = new Regex(
+            @"(?:time\s*to\s*completion|timeToCompletion|time_to_completion|remainingHours|hoursRemaining|hoursLeft|hours_left|hoursToCompletion|completionHours|hoursUntilEnd|hoursToEnd|endInHours)[^0-9]{0,80}([0-9]+(?:[.,][0-9]+)?)",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+        private static readonly Regex DeadlineNextValueRegex = new Regex(
+            @"(?:time[ \t]+to[ \t]+completion|time[ \t]+remaining|deadline|ends?[ \t]+in|ending[ \t]+in)[ \t]*[:\-]?[ \t]*(?:\r?\n[ \t]*){0,2}(END|ENDED|[0-9]+(?:[.,][0-9]+)?(?:[ \t]*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s))?(?:[ \t]+[0-9]+(?:[.,][0-9]+)?[ \t]*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s))*|[0-9]{1,3}:[0-9]{2}(?::[0-9]{2})?)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        // Current SkinClub pages render the countdown as, for example:
+        // "TIME TO COMPLETION: 161H 59M 2S". Keep this parser deliberately
+        // anchored to that visible label so unrelated hidden timestamps cannot
+        // be mistaken for the giveaway deadline.
+        private static readonly Regex VisibleCompletionTimerRegex = new Regex(
+            @"time\s*to\s*completion\s*:?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:hours?|hrs?|hr|h)\s*(?:([0-9]+(?:[.,][0-9]+)?)\s*(?:minutes?|mins?|min|m)\s*)?(?:([0-9]+(?:[.,][0-9]+)?)\s*(?:seconds?|secs?|sec|s))?",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
         private static readonly HttpClient Client = MakeClient();
+        private static readonly SemaphoreSlim RenderFallbackThrottle = new SemaphoreSlim(3, 3);
 
         private static Dictionary<string, string> BuildDomainCreators()
         {
@@ -363,6 +384,325 @@ namespace SkinClubGiveawayDesktop
             return true;
         }
 
+        private static bool TryParseHoursNumber(string raw, out double hours)
+        {
+            hours = 0;
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+            string number = raw.Trim().Replace(',', '.');
+            double parsed;
+            if (!double.TryParse(number, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out parsed)) return false;
+            // Sanity limit: a creator giveaway should not run for years. This also
+            // prevents Unix timestamps or unrelated large numbers being treated as hours.
+            if (parsed < 0 || parsed > 17568) return false;
+            hours = parsed;
+            return true;
+        }
+
+        private static string DeadlineFromHours(double hours)
+        {
+            DateTime end = DateTime.Now.AddHours(hours);
+            return end.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+        }
+
+        private static string DeadlineFromRenderedCompletionText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "-";
+
+            string decoded = WebUtility.HtmlDecode(text).Replace('\u00A0', ' ');
+            Match match = VisibleCompletionTimerRegex.Match(decoded);
+            if (!match.Success) return "-";
+
+            double hours = 0, minutes = 0, seconds = 0;
+            string h = (match.Groups[1].Value ?? "").Replace(',', '.');
+            string m = match.Groups[2].Success ? (match.Groups[2].Value ?? "0").Replace(',', '.') : "0";
+            string sec = match.Groups[3].Success ? (match.Groups[3].Value ?? "0").Replace(',', '.') : "0";
+
+            if (!double.TryParse(h, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out hours)) return "-";
+            if (!double.TryParse(m, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out minutes)) minutes = 0;
+            if (!double.TryParse(sec, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out seconds)) seconds = 0;
+
+            if (hours < 0 || hours > 17568 || minutes < 0 || minutes >= 60 || seconds < 0 || seconds >= 60) return "-";
+
+            DateTime end = DateTime.Now.AddSeconds(hours * 3600.0 + minutes * 60.0 + seconds);
+            return end.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+        }
+
+        private static string DeadlineFromRawHtml(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html)) return "-";
+
+            string decoded = WebUtility.HtmlDecode(html);
+            Match hoursMatch = RemainingHoursRegex.Match(decoded);
+            if (!hoursMatch.Success) hoursMatch = RemainingHoursNearLabelRegex.Match(decoded);
+            if (!hoursMatch.Success) hoursMatch = RemainingBareHoursNearLabelRegex.Match(decoded);
+            if (hoursMatch.Success)
+            {
+                double hours;
+                if (TryParseHoursNumber(hoursMatch.Groups[1].Value, out hours))
+                    return DeadlineFromHours(hours);
+            }
+
+            return "-";
+        }
+
+        private static string DeadlineFromVisibleText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "-";
+
+            // First handle the normal same-line form.
+            MatchCollection matches = DeadlineLineRegex.Matches(text);
+            foreach (Match match in matches)
+            {
+                string raw = Regex.Replace(match.Groups[1].Value ?? "", @"\s+", " ").Trim().Trim(' ', ':', '|');
+                if (raw == "" || raw == "-") continue;
+                if (ExactEndedValueRegex.IsMatch(raw)) return "Ended";
+                string converted = DeadlineAsDate(raw);
+                if (converted != "-") return converted;
+            }
+
+            // The new layout can render the label and hour count in separate block
+            // elements, e.g. "Time to completion:" on one line and "46" on the next.
+            Match next = DeadlineNextValueRegex.Match(text);
+            if (next.Success)
+            {
+                string raw = Regex.Replace(next.Groups[1].Value ?? "", @"\s+", " ").Trim();
+                if (ExactEndedValueRegex.IsMatch(raw)) return "Ended";
+                string converted = DeadlineAsDate(raw);
+                if (converted != "-") return converted;
+            }
+
+            return "-";
+        }
+
+        private static string FindChromiumBrowser()
+        {
+            List<string> paths = new List<string>();
+            string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            if (!string.IsNullOrWhiteSpace(pf86))
+            {
+                paths.Add(Path.Combine(pf86, "Microsoft", "Edge", "Application", "msedge.exe"));
+                paths.Add(Path.Combine(pf86, "Google", "Chrome", "Application", "chrome.exe"));
+            }
+            if (!string.IsNullOrWhiteSpace(pf))
+            {
+                paths.Add(Path.Combine(pf, "Microsoft", "Edge", "Application", "msedge.exe"));
+                paths.Add(Path.Combine(pf, "Google", "Chrome", "Application", "chrome.exe"));
+                paths.Add(Path.Combine(pf, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"));
+            }
+            if (!string.IsNullOrWhiteSpace(local))
+            {
+                paths.Add(Path.Combine(local, "Microsoft", "Edge", "Application", "msedge.exe"));
+                paths.Add(Path.Combine(local, "Google", "Chrome", "Application", "chrome.exe"));
+                paths.Add(Path.Combine(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"));
+            }
+
+            foreach (string path in paths)
+                if (File.Exists(path)) return path;
+            return null;
+        }
+
+        private static int GetFreeTcpPort()
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                return ((IPEndPoint)listener.LocalEndpoint).Port;
+            }
+            finally { listener.Stop(); }
+        }
+
+        private static string JsonStringValue(object value)
+        {
+            return value == null ? "" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static async Task<string> DevToolsEvaluateAsync(string websocketUrl, string expression)
+        {
+            if (string.IsNullOrWhiteSpace(websocketUrl)) return "";
+            using (ClientWebSocket ws = new ClientWebSocket())
+            {
+                CancellationTokenSource connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await ws.ConnectAsync(new Uri(websocketUrl), connectCts.Token);
+
+                JavaScriptSerializer js = new JavaScriptSerializer();
+                Dictionary<string, object> payload = new Dictionary<string, object>();
+                payload["id"] = 1;
+                payload["method"] = "Runtime.evaluate";
+                Dictionary<string, object> parameters = new Dictionary<string, object>();
+                parameters["expression"] = expression;
+                parameters["returnByValue"] = true;
+                parameters["awaitPromise"] = true;
+                payload["params"] = parameters;
+
+                byte[] outgoing = Encoding.UTF8.GetBytes(js.Serialize(payload));
+                await ws.SendAsync(new ArraySegment<byte>(outgoing), WebSocketMessageType.Text, true, CancellationToken.None);
+
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    byte[] buffer = new byte[8192];
+                    DateTime expires = DateTime.UtcNow.AddSeconds(8);
+                    while (DateTime.UtcNow < expires && ws.State == WebSocketState.Open)
+                    {
+                        CancellationTokenSource receiveCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                        WebSocketReceiveResult rr;
+                        try
+                        {
+                            rr = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), receiveCts.Token);
+                        }
+                        catch (OperationCanceledException) { continue; }
+
+                        if (rr.MessageType == WebSocketMessageType.Close) break;
+                        ms.Write(buffer, 0, rr.Count);
+                        if (!rr.EndOfMessage) continue;
+
+                        string message = Encoding.UTF8.GetString(ms.ToArray());
+                        ms.SetLength(0);
+                        try
+                        {
+                            Dictionary<string, object> root = js.Deserialize<Dictionary<string, object>>(message);
+                            object idObj;
+                            if (!root.TryGetValue("id", out idObj) || Convert.ToInt32(idObj) != 1) continue;
+                            object resultObj;
+                            if (!root.TryGetValue("result", out resultObj)) return "";
+                            Dictionary<string, object> result = resultObj as Dictionary<string, object>;
+                            if (result == null) return "";
+                            object innerObj;
+                            if (!result.TryGetValue("result", out innerObj)) return "";
+                            Dictionary<string, object> inner = innerObj as Dictionary<string, object>;
+                            if (inner == null) return "";
+                            object valueObj;
+                            if (!inner.TryGetValue("value", out valueObj)) return "";
+                            return JsonStringValue(valueObj);
+                        }
+                        catch { return ""; }
+                    }
+                }
+            }
+            return "";
+        }
+
+        private static async Task<string> FetchRenderedDeadlineAsync(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return "-";
+            string browser = FindChromiumBrowser();
+            if (string.IsNullOrWhiteSpace(browser)) return "-";
+
+            await RenderFallbackThrottle.WaitAsync();
+            string profileDir = null;
+            Process process = null;
+            try
+            {
+                int port = GetFreeTcpPort();
+                profileDir = Path.Combine(Path.GetTempPath(), "SkinClubGWFinder_" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(profileDir);
+
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = browser;
+                psi.Arguments = "--headless=new --disable-gpu --disable-extensions --no-first-run --no-default-browser-check " +
+                                "--disable-sync --mute-audio --disable-background-networking --remote-allow-origins=* --remote-debugging-port=" + port +
+                                " --user-data-dir=\"" + profileDir + "\" \"" + url.Replace("\"", "") + "\"";
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.WindowStyle = ProcessWindowStyle.Hidden;
+
+                process = new Process();
+                process.StartInfo = psi;
+                process.Start();
+                // Drain pipes immediately so Chromium can never block on logging.
+                Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+
+                HttpClientHandler localHandler = new HttpClientHandler();
+                localHandler.UseProxy = false;
+                HttpClient localClient = new HttpClient(localHandler);
+                localClient.Timeout = TimeSpan.FromSeconds(2);
+                string websocketUrl = "";
+                DateTime discoveryDeadline = DateTime.UtcNow.AddSeconds(8);
+                while (DateTime.UtcNow < discoveryDeadline && string.IsNullOrWhiteSpace(websocketUrl))
+                {
+                    try
+                    {
+                        string tabsJson = await localClient.GetStringAsync("http://127.0.0.1:" + port + "/json/list");
+                        JavaScriptSerializer serializer = new JavaScriptSerializer();
+                        object[] tabs = serializer.Deserialize<object[]>(tabsJson);
+                        foreach (object tabObj in tabs)
+                        {
+                            Dictionary<string, object> tab = tabObj as Dictionary<string, object>;
+                            if (tab == null) continue;
+                            string type = tab.ContainsKey("type") ? JsonStringValue(tab["type"]) : "";
+                            string tabUrl = tab.ContainsKey("url") ? JsonStringValue(tab["url"]) : "";
+                            string ws = tab.ContainsKey("webSocketDebuggerUrl") ? JsonStringValue(tab["webSocketDebuggerUrl"]) : "";
+                            if (type == "page" && !string.IsNullOrWhiteSpace(ws))
+                            {
+                                websocketUrl = ws;
+                                if (!string.IsNullOrWhiteSpace(tabUrl) && tabUrl.IndexOf(new Uri(url).Host, StringComparison.OrdinalIgnoreCase) >= 0)
+                                    break;
+                            }
+                        }
+                    }
+                    catch { }
+                    if (string.IsNullOrWhiteSpace(websocketUrl)) await Task.Delay(250);
+                }
+
+                if (string.IsNullOrWhiteSpace(websocketUrl)) return "-";
+
+                // Read the text the user actually sees. The previous build scanned
+                // hidden JS/state too, which could pick an unrelated timer and produce
+                // SEP 11/SEP 12 even when the page visibly showed 161H 59M 2S.
+                string expression = @"(() => {
+                    try {
+                        if (!document.body) return '';
+                        return document.body.innerText || document.body.textContent || '';
+                    } catch (e) {
+                        return '';
+                    }
+                })()";
+
+                // The countdown is populated asynchronously. Poll the live DOM instead of
+                // taking one snapshot too early. This also captures CSS pseudo-element text
+                // and values stored in element attributes/local storage.
+                DateTime renderDeadline = DateTime.UtcNow.AddSeconds(10);
+                while (DateTime.UtcNow < renderDeadline)
+                {
+                    string renderedData = await DevToolsEvaluateAsync(websocketUrl, expression);
+                    if (!string.IsNullOrWhiteSpace(renderedData))
+                    {
+                        // The visible TIME TO COMPLETION timer is authoritative.
+                        string deadline = DeadlineFromRenderedCompletionText(renderedData);
+                        if (deadline != "-") return deadline;
+
+                        // Legacy visible countdown formats remain supported, but do not
+                        // inspect hidden timestamps/state here. Those caused the bad dates.
+                        deadline = DeadlineFromVisibleText(renderedData);
+                        if (deadline != "-") return deadline;
+                    }
+                    await Task.Delay(500);
+                }
+                return "-";
+            }
+            catch { return "-"; }
+            finally
+            {
+                if (process != null)
+                {
+                    try { if (!process.HasExited) process.Kill(); } catch { }
+                    try { process.Dispose(); } catch { }
+                }
+                if (!string.IsNullOrWhiteSpace(profileDir))
+                {
+                    try { Directory.Delete(profileDir, true); } catch { }
+                }
+                RenderFallbackThrottle.Release();
+            }
+        }
+
         private static string AbsoluteDeadlineFromHtml(string html)
         {
             if (string.IsNullOrWhiteSpace(html)) return "-";
@@ -410,6 +750,9 @@ namespace SkinClubGiveawayDesktop
                 }
             }
 
+            string hoursDeadline = DeadlineFromRawHtml(html);
+            if (hoursDeadline != "-") return hoursDeadline;
+
             return "-";
         }
 
@@ -418,6 +761,13 @@ namespace SkinClubGiveawayDesktop
             if (string.IsNullOrWhiteSpace(raw)) return "-";
             string value = Regex.Replace(raw, @"\s+", " ").Trim().Trim(' ', ':', '|');
             if (value == "" || value == "-") return "-";
+
+            double bareHours;
+            if (Regex.IsMatch(value.Replace(',', '.'), @"^\d+(?:\.\d+)?$") &&
+                TryParseHoursNumber(value, out bareHours))
+            {
+                return DeadlineFromHours(bareHours);
+            }
 
             TimeSpan countdown;
             if (TryParseCountdown(value, out countdown))
@@ -456,29 +806,42 @@ namespace SkinClubGiveawayDesktop
                 ? string.Format("{0} / {1}", remaining.Value, total.Value)
                 : "-";
 
-            string deadline = AbsoluteDeadlineFromHtml(html);
+            string deadline = "-";
             bool explicitEnded = false;
-            bool hasLiveDeadlineSignal = deadline != "-";
-            MatchCollection deadlineMatches = DeadlineLineRegex.Matches(text);
-            foreach (Match dm in deadlineMatches)
+            bool hasLiveDeadlineSignal = false;
+
+            // Prefer the exact current visible timer format before any legacy parser.
+            string visibleDeadline = DeadlineFromRenderedCompletionText(text);
+            if (visibleDeadline == "-") visibleDeadline = DeadlineFromVisibleText(text);
+            if (string.Equals(visibleDeadline, "Ended", StringComparison.OrdinalIgnoreCase))
             {
-                string raw = Regex.Replace(dm.Groups[1].Value ?? "", @"\s+", " ").Trim();
-                string display = raw.Trim(' ', ':', '|');
-
-                // A bare dash means the giveaway is live but the site does not expose a deadline.
-                if (display == "" || display == "-") continue;
-
-                if (ExactEndedValueRegex.IsMatch(display))
-                {
-                    explicitEnded = true;
-                    deadline = "Ended";
-                    break;
-                }
-
-                // Any non-ended value in the dedicated countdown/deadline field is
-                // enough to treat the page as live. The UI stores only a DATE.
+                explicitEnded = true;
+                deadline = "Ended";
+            }
+            else if (visibleDeadline != "-")
+            {
                 hasLiveDeadlineSignal = true;
-                if (deadline == "-") deadline = DeadlineAsDate(display);
+                deadline = visibleDeadline;
+            }
+            else
+            {
+                // On the current SkinClub layout the visible completion value is injected
+                // by JavaScript. If the static page already contains the timer label, do
+                // NOT trust hidden endTime/deadline/remainingTime values: some of those
+                // belong to unrelated page state and were the source of the wrong dates.
+                bool currentCompletionLayout = Regex.IsMatch(text, @"time\s*to\s*completion", RegexOptions.IgnoreCase);
+                if (currentCompletionLayout)
+                {
+                    hasLiveDeadlineSignal = true;
+                }
+                else
+                {
+                    // Legacy creator pages may still expose a real absolute deadline.
+                    deadline = AbsoluteDeadlineFromHtml(html);
+                    if (deadline != "-") hasLiveDeadlineSignal = true;
+                    if (!hasLiveDeadlineSignal && DeadlineLineRegex.IsMatch(text))
+                        hasLiveDeadlineSignal = true;
+                }
             }
 
             bool soldOut = remaining.HasValue && remaining.Value <= 0;
@@ -523,6 +886,17 @@ namespace SkinClubGiveawayDesktop
                     item.Status = p.Status;
                     item.Ticket = p.Ticket;
                     item.Deadline = p.Deadline;
+
+                    // Current SkinClub creator pages can inject the hour countdown only
+                    // after JavaScript runs. If the direct fetch has a live giveaway but
+                    // no deadline, use the installed Edge/Chrome engine to render the DOM
+                    // and convert the resulting remaining-hours value to a calendar date.
+                    if (string.Equals(item.Status, "active", StringComparison.OrdinalIgnoreCase) &&
+                        (item.Deadline == "-" || Regex.IsMatch(html, @"time\s*to\s*completion", RegexOptions.IgnoreCase)))
+                    {
+                        string renderedDeadline = await FetchRenderedDeadlineAsync(item.Url);
+                        if (renderedDeadline != "-") item.Deadline = renderedDeadline;
+                    }
                     return item;
                 }
                 catch (Exception ex)
@@ -1021,6 +1395,9 @@ namespace SkinClubGiveawayDesktop
         private readonly Color Success = Color.FromArgb(45, 212, 191);
         private readonly Color Warning = Color.FromArgb(251, 191, 36);
         private readonly Color Danger = Color.FromArgb(251, 113, 133);
+        private readonly Color PriorityGreen = Color.FromArgb(74, 222, 128);
+        private readonly Color PriorityYellow = Color.FromArgb(250, 204, 21);
+        private readonly Color PriorityRed = Color.FromArgb(248, 113, 113);
         private readonly Color ActiveView = Color.FromArgb(45, 212, 191);
         private readonly Color HistoryView = Color.FromArgb(245, 158, 11);
         private readonly Color JoinedView = Color.FromArgb(167, 139, 250);
@@ -1839,22 +2216,31 @@ namespace SkinClubGiveawayDesktop
                 grid.Rows[row].Cells["Ticket"].Style.Font = new Font("Segoe UI Semibold", 9.2F);
 
                 bool activeLike = string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase);
-                grid.Rows[row].Cells["Ticket"].Style.ForeColor = activeLike ? Success : Muted;
-                grid.Rows[row].Cells["Deadline"].Style.ForeColor = ended ? Muted : Color.FromArgb(205, 215, 231);
+                grid.Rows[row].Cells["Ticket"].Style.ForeColor = Muted;
+                grid.Rows[row].Cells["Deadline"].Style.ForeColor = Muted;
                 if (ended) grid.Rows[row].DefaultCellStyle.ForeColor = Color.FromArgb(183, 193, 208);
 
                 long remaining, total;
                 if (activeLike && TryTicketNumbers(i.Ticket, out remaining, out total) && total > 0)
                 {
-                    double ratio = (double)remaining / (double)total;
-                    if (remaining <= 100 || ratio <= 0.15) grid.Rows[row].Cells["Ticket"].Style.ForeColor = Warning;
+                    if (remaining < 100)
+                        grid.Rows[row].Cells["Ticket"].Style.ForeColor = PriorityRed;
+                    else if (remaining < 250)
+                        grid.Rows[row].Cells["Ticket"].Style.ForeColor = PriorityYellow;
+                    else
+                        grid.Rows[row].Cells["Ticket"].Style.ForeColor = PriorityGreen;
                 }
 
                 DateTime due;
                 if (activeLike && TryDeadlineDate(i, out due))
                 {
                     double days = (due.Date - DateTime.Now.Date).TotalDays;
-                    if (days >= 0 && days <= 2) grid.Rows[row].Cells["Deadline"].Style.ForeColor = Warning;
+                    if (days <= 2)
+                        grid.Rows[row].Cells["Deadline"].Style.ForeColor = PriorityRed;
+                    else if (days <= 7)
+                        grid.Rows[row].Cells["Deadline"].Style.ForeColor = PriorityYellow;
+                    else
+                        grid.Rows[row].Cells["Deadline"].Style.ForeColor = PriorityGreen;
                 }
 
                 grid.Rows[row].Cells["Copy"].Style.BackColor = MixColor(Surface3, Accent2, 0.12);
