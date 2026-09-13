@@ -1,0 +1,5 @@
+Search/history fix:
+- Known and discovered creator domains are now probed for 62 days instead of 35.
+- A rendered countdown that says END/ENDED/FIN now changes Status to ended, not just Deadline.
+- This allows older ended giveaways such as https://joaco.club/010826/ to be rediscovered and moved into History.
+- History retention remains one calendar month from when the app records the giveaway as ended.

@@ -19,5 +19,3 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 - **Copy and open actions** for direct giveaway links.
 - **Automatic refresh** every 10 minutes, plus manual Refresh.
 - **Persistent local data** between launches.
-
-<img width="1226" height="793" alt="image" src="https://github.com/user-attachments/assets/557023f8-4e5d-4b53-a71e-3782e5e82b13" />

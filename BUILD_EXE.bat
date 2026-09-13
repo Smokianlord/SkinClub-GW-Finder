@@ -16,11 +16,9 @@ if not exist "%CSC%" (
   exit /b 1
 )
 
-for %%F in ("SkinClubGWFinder.exe" "SkinClubGWFinder_NEW.exe" "SkinClubGWFinder_TIMER_FIXED.exe") do (
-  if exist %%F del /f /q %%F
-)
+if exist "%APP%" del /f /q "%APP%"
 
-echo Building SkinClub GW Finder into %APP% ...
+echo Building SkinClub GW Finder...
 "%CSC%" /nologo /codepage:65001 /target:winexe /optimize+ /win32icon:"SkinClubGWFinder.ico" /out:"%APP%" ^
   /reference:System.dll ^
   /reference:System.Core.dll ^
@@ -32,7 +30,7 @@ echo Building SkinClub GW Finder into %APP% ...
 
 if errorlevel 1 (
   echo.
-  echo BUILD FAILED. No EXE is included in this ZIP, so there is no stale EXE to launch.
+  echo BUILD FAILED.
   echo.
   pause
   exit /b 1
@@ -40,7 +38,6 @@ if errorlevel 1 (
 
 echo.
 echo SUCCESS: %APP%
-echo The title bar is: SkinClub GW Finder
 echo.
 start "" "%APP%"
 exit /b 0

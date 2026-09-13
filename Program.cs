@@ -30,6 +30,7 @@ namespace SkinClubGiveawayDesktop
         public string Error { get; set; }
         public bool Joined { get; set; }
         public string JoinedAt { get; set; }
+        public string HistorySince { get; set; }
     }
 
     public class AppData
@@ -93,6 +94,7 @@ namespace SkinClubGiveawayDesktop
                 AppData data = js.Deserialize<AppData>(json);
                 if (data == null) data = DefaultData();
                 if (data.Items == null) data.Items = new List<GiveawayItem>();
+                PruneOldHistory(data);
                 return data;
             }
             catch
@@ -105,6 +107,7 @@ namespace SkinClubGiveawayDesktop
 
         public static void Save(AppData data)
         {
+            PruneOldHistory(data);
             lock (FileLock)
             {
                 Directory.CreateDirectory(DataDir);
@@ -116,6 +119,42 @@ namespace SkinClubGiveawayDesktop
                 if (File.Exists(DataFile)) File.Delete(DataFile);
                 File.Move(temp, DataFile);
             }
+        }
+
+        private static void PruneOldHistory(AppData data)
+        {
+            if (data == null || data.Items == null) return;
+
+            // Keep History for one full calendar month from the moment an item
+            // actually enters History. Do NOT infer retention from the DDMMYY URL:
+            // that was destructive for existing data and could wipe the whole
+            // History list immediately after an upgrade. Joined items are always
+            // preserved.
+            DateTime now = DateTime.UtcNow;
+            DateTime cutoff = now.AddMonths(-1);
+
+            data.Items.RemoveAll(delegate(GiveawayItem item)
+            {
+                if (item == null || item.Joined) return false;
+                if (!string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase))
+                {
+                    item.HistorySince = null;
+                    return false;
+                }
+
+                DateTime historySince;
+                if (string.IsNullOrWhiteSpace(item.HistorySince) ||
+                    !DateTime.TryParse(item.HistorySince, null,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out historySince))
+                {
+                    // Existing History from older versions gets a fresh retention
+                    // clock instead of being deleted on first launch.
+                    item.HistorySince = now.ToString("o");
+                    return false;
+                }
+
+                return historySince.ToUniversalTime() <= cutoff;
+            });
         }
 
         private static void ImportOldDataIfPresent()
@@ -172,7 +211,7 @@ namespace SkinClubGiveawayDesktop
         private static readonly Dictionary<string, string> CreatorDomains = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             {"Anomaly", "anomaly.club"}, {"Blarg", "blarg.club"}, {"Bomman", "bomman.club"},
-            {"bysTaXx", "bystaxx.club"}, {"DEVNGUYEN", "devnguyen.club"}, {"DrewUnboxing", "drewunboxing.club"},
+            {"bysTaXx", "bystaxx.club"}, {"DEVNGUYEN", "devnguyen.club"}, {"DrewCS2", "drewcs2.club"}, {"DrewUnboxing", "drewunboxing.club"},
             {"ErycTriceps", "eryctriceps.club"}, {"HaiX", "haix.club"}, {"Jon Sandman", "jonsandman.club"},
             {"McNasty", "mcnasty.club"}, {"MrTweeday", "mrtweeday.club"}, {"NadeKing", "nadeking.club"},
             {"RickyWorld", "rickyworld.club"}, {"SAMZ", "samz.club"}, {"shynW", "shynw.club"},
@@ -185,7 +224,21 @@ namespace SkinClubGiveawayDesktop
         };
 
         private static readonly Dictionary<string, string> DomainCreators = BuildDomainCreators();
-        private static readonly Regex DirectUrlRegex = new Regex(@"https?://(?:www\.)?([a-z0-9-]+\.club)/(\d{6})/?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // Skin.Club's public partner page shows a featured subset rather than a
+        // complete directory. These names are combined with the creator-domain
+        // list below when Deep Search looks through partner social activity.
+        private static readonly string[] FeaturedPartnerNames = new string[]
+        {
+            "ENCE", "G2 Esports", "HLTV", "GamerLegion", "Team Vitality",
+            "James BanKs", "apEX", "karrigan", "Mauisnake", "Anders Blume",
+            "Astralis", "9INE", "Virre CS2"
+        };
+
+        private static readonly Regex SocialUrlRegex = new Regex(
+            @"https?://(?:www\.)?(?:(?:youtube\.com|youtu\.be)/[^\s""'<>\\]+|(?:x\.com|twitter\.com)/[^\s""'<>\\]+|t\.me/[^\s""'<>\\]+|(?:discord\.gg|discord\.com)/[^\s""'<>\\]+|instagram\.com/[^\s""'<>\\]+|tiktok\.com/[^\s""'<>\\]+|twitch\.tv/[^\s""'<>\\]+|kick\.com/[^\s""'<>\\]+|facebook\.com/[^\s""'<>\\]+|threads\.net/[^\s""'<>\\]+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex DirectUrlRegex = new Regex(@"https?://(?:www\.)?([a-z0-9-]+\.club)/(\d{6})/?(?:\?[^\s""'<>\\]*)?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex VideoIdRegex = new Regex("\"videoId\":\"([A-Za-z0-9_-]{11})\"", RegexOptions.Compiled);
         // Status parsing is anchored to the giveaway's own ticket/deadline fields.
         // Generic END/FIN words elsewhere on the page (FAQ, footer, old results,
@@ -247,6 +300,28 @@ namespace SkinClubGiveawayDesktop
             return map;
         }
 
+        private static List<string> PartnerSearchNames()
+        {
+            HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string name in CreatorDomains.Keys) names.Add(name);
+            foreach (string name in FeaturedPartnerNames) names.Add(name);
+            return names.OrderBy(delegate(string x) { return x; }, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static List<string> ExtractSocialUrls(string raw)
+        {
+            List<string> urls = new List<string>();
+            string normalized = NormalizeDiscoveryHtml(raw);
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in SocialUrlRegex.Matches(normalized))
+            {
+                string url = WebUtility.HtmlDecode(m.Value).Trim().TrimEnd('.', ',', ';', ')', ']', '}');
+                if (url.Length == 0 || !seen.Add(url)) continue;
+                urls.Add(url);
+            }
+            return urls;
+        }
+
         private static HttpClient MakeClient()
         {
             ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
@@ -281,9 +356,50 @@ namespace SkinClubGiveawayDesktop
         private static string NormalizeDiscoveryHtml(string s)
         {
             if (s == null) return "";
-            return s.Replace("\\u002F", "/").Replace("\\u002f", "/")
+            string normalized = s.Replace("\\u002F", "/").Replace("\\u002f", "/")
                     .Replace("\\u003A", ":").Replace("\\u003a", ":")
-                    .Replace("\\/", "/").Replace("&amp;", "&");
+                    .Replace("\\u0026", "&")
+                    .Replace("\\/", "/");
+            normalized = WebUtility.HtmlDecode(normalized);
+            try { normalized = Uri.UnescapeDataString(normalized); } catch { }
+            return normalized;
+        }
+
+        private static string GiveawayKey(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return "";
+            try
+            {
+                Uri u = new Uri(url);
+                string host = u.Host.ToLowerInvariant();
+                if (host.StartsWith("www.")) host = host.Substring(4);
+                string path = u.AbsolutePath.TrimEnd('/').ToLowerInvariant();
+                return host + path;
+            }
+            catch
+            {
+                string value = url.Trim();
+                int q = value.IndexOf('?');
+                if (q >= 0) value = value.Substring(0, q);
+                return value.TrimEnd('/').ToLowerInvariant();
+            }
+        }
+
+        private static string CleanDiscoveredUrl(string rawUrl)
+        {
+            if (string.IsNullOrWhiteSpace(rawUrl)) return rawUrl;
+            string url = WebUtility.HtmlDecode(rawUrl).Trim().TrimEnd('.', ',', ';', ')', ']', '}');
+            try
+            {
+                Uri u = new Uri(url);
+                string path = u.GetLeftPart(UriPartial.Path);
+                if (!path.EndsWith("/")) path += "/";
+                return path;
+            }
+            catch
+            {
+                return url;
+            }
         }
 
         private static List<Candidate> ExtractDirectUrls(string raw, string source)
@@ -294,9 +410,9 @@ namespace SkinClubGiveawayDesktop
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (Match m in matches)
             {
-                string url = m.Value;
-                if (!url.EndsWith("/")) url += "/";
-                if (!seen.Add(url.TrimEnd('/'))) continue;
+                string url = CleanDiscoveredUrl(m.Value);
+                string key = GiveawayKey(url);
+                if (key.Length == 0 || !seen.Add(key)) continue;
                 list.Add(new Candidate(InferCreator(url, null), url, source));
             }
             return list;
@@ -869,13 +985,13 @@ namespace SkinClubGiveawayDesktop
             {
                 GiveawayItem item = new GiveawayItem
                 {
-                    Creator = InferCreator(c.Url, c.Creator), Url = c.Url, Status = "unknown", Ticket = "-", Deadline = "-",
+                    Creator = InferCreator(c.Url, c.Creator), Url = CleanDiscoveredUrl(c.Url), Status = "unknown", Ticket = "-", Deadline = "-",
                     LastChecked = DateTime.UtcNow.ToString("o"), Source = c.Source, Error = null
                 };
                 try
                 {
                     HttpResponseMessage r = await Client.GetAsync(c.Url);
-                    item.Url = r.RequestMessage.RequestUri.ToString();
+                    item.Url = CleanDiscoveredUrl(r.RequestMessage.RequestUri.ToString());
                     if (!r.IsSuccessStatusCode)
                     {
                         item.Error = "HTTP " + (int)r.StatusCode;
@@ -895,7 +1011,16 @@ namespace SkinClubGiveawayDesktop
                         (item.Deadline == "-" || Regex.IsMatch(html, @"time\s*to\s*completion", RegexOptions.IgnoreCase)))
                     {
                         string renderedDeadline = await FetchRenderedDeadlineAsync(item.Url);
-                        if (renderedDeadline != "-") item.Deadline = renderedDeadline;
+                        if (renderedDeadline != "-")
+                        {
+                            item.Deadline = renderedDeadline;
+                            // The rendered page is authoritative for completion state.
+                            // Previously a page showing "Tiempo restante: FIN" / "END"
+                            // only changed the Deadline text while leaving Status=active,
+                            // so ended giveaways never moved into History.
+                            if (string.Equals(renderedDeadline, "Ended", StringComparison.OrdinalIgnoreCase))
+                                item.Status = "ended";
+                        }
                     }
                     return item;
                 }
@@ -913,11 +1038,11 @@ namespace SkinClubGiveawayDesktop
             Dictionary<string, GiveawayItem> byUrl = new Dictionary<string, GiveawayItem>(StringComparer.OrdinalIgnoreCase);
             foreach (GiveawayItem i in data.Items)
             {
-                if (i.Url != null) byUrl[i.Url.TrimEnd('/')] = i;
+                if (i.Url != null) byUrl[GiveawayKey(i.Url)] = i;
             }
             foreach (GiveawayItem u in updates)
             {
-                string key = (u.Url ?? "").TrimEnd('/');
+                string key = GiveawayKey(u.Url);
                 GiveawayItem existing;
                 if (byUrl.TryGetValue(key, out existing))
                 {
@@ -934,13 +1059,31 @@ namespace SkinClubGiveawayDesktop
                     }
                     else
                     {
-                        existing.Creator = u.Creator; existing.Url = u.Url; existing.Status = u.Status;
+                        bool wasEnded = string.Equals(existing.Status, "ended", StringComparison.OrdinalIgnoreCase);
+                        bool isEnded = string.Equals(u.Status, "ended", StringComparison.OrdinalIgnoreCase);
+
+                        existing.Creator = u.Creator;
+                        existing.Url = CleanDiscoveredUrl(u.Url);
+                        existing.Status = u.Status;
                         existing.Ticket = u.Ticket; existing.Deadline = u.Deadline; existing.LastChecked = u.LastChecked;
                         existing.Source = u.Source; existing.Error = u.Error;
+
+                        if (isEnded)
+                        {
+                            if (!wasEnded || string.IsNullOrWhiteSpace(existing.HistorySince))
+                                existing.HistorySince = DateTime.UtcNow.ToString("o");
+                        }
+                        else
+                        {
+                            existing.HistorySince = null;
+                        }
                     }
                 }
                 else
                 {
+                    u.Url = CleanDiscoveredUrl(u.Url);
+                    if (string.Equals(u.Status, "ended", StringComparison.OrdinalIgnoreCase))
+                        u.HistorySince = DateTime.UtcNow.ToString("o");
                     data.Items.Add(u);
                     byUrl[key] = u;
                 }
@@ -967,23 +1110,58 @@ namespace SkinClubGiveawayDesktop
             finally { ScanLock.Release(); }
         }
 
+        private static string BuildProbeUrl(string host, string slug)
+        {
+            return "https://" + host + "/" + slug + "/";
+        }
+
+        private static IEnumerable<string> RecentDateSlugs(int daysBack)
+        {
+            DateTime today = DateTime.Now.Date;
+            for (int offset = 0; offset <= daysBack; offset++)
+            {
+                DateTime d = today.AddDays(-offset);
+                yield return string.Format("{0:00}{1:00}{2:00}", d.Day, d.Month, d.Year % 100);
+            }
+        }
+
         private static List<Candidate> GeneratedCandidates()
         {
             List<Candidate> list = new List<Candidate>();
-            DateTime month = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
-            for (int monthOffset = 0; monthOffset < 4; monthOffset++)
+            foreach (KeyValuePair<string, string> kv in CreatorDomains)
             {
-                DateTime d = month.AddMonths(-monthOffset);
-                foreach (KeyValuePair<string, string> kv in CreatorDomains)
-                {
-                    for (int prefix = 1; prefix <= 12; prefix++)
-                    {
-                        string slug = string.Format("{0:00}{1:00}{2:00}", prefix, d.Month, d.Year % 100);
-                        list.Add(new Candidate(kv.Key, "https://" + kv.Value + "/" + slug + "/", "domain-probe"));
-                    }
-                }
+                // Creator giveaway slugs are DDMMYY. Probe a little over two
+                // months of dates so Deep Search can rediscover giveaways that
+                // have already ended and still belong in the one-month History
+                // retention window. The old 35-day window missed older campaigns
+                // such as joaco.club/010826/ when scanning in mid-September.
+                foreach (string slug in RecentDateSlugs(62))
+                    list.Add(new Candidate(kv.Key, BuildProbeUrl(kv.Value, slug), "domain-probe"));
             }
             return list;
+        }
+
+        private static void AddDiscoveredDomainProbes(List<Candidate> candidates)
+        {
+            HashSet<string> hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Candidate c in candidates.ToArray())
+            {
+                try
+                {
+                    Uri u = new Uri(c.Url);
+                    string host = u.Host.ToLowerInvariant();
+                    if (host.StartsWith("www.")) host = host.Substring(4);
+                    if (host.EndsWith(".club", StringComparison.OrdinalIgnoreCase)) hosts.Add(host);
+                }
+                catch { }
+            }
+
+            foreach (string host in hosts)
+            {
+                string creator = InferCreator("https://" + host + "/", null);
+                foreach (string slug in RecentDateSlugs(62))
+                    candidates.Add(new Candidate(creator, BuildProbeUrl(host, slug), "discovered-domain-probe"));
+            }
         }
 
         private static async Task<string> GetStringSafeAsync(string url)
@@ -1000,7 +1178,7 @@ namespace SkinClubGiveawayDesktop
         private static async Task<List<Candidate>> DiscoverTelegramAsync()
         {
             List<Candidate> found = new List<Candidate>();
-            string[] channels = new string[] { "skinclubcreatorsgiveaway" };
+            string[] channels = new string[] { "skinclubcreatorsgiveaway", "skinclubcs2" };
             foreach (string channel in channels)
             {
                 string raw = await GetStringSafeAsync("https://t.me/s/" + channel);
@@ -1013,26 +1191,44 @@ namespace SkinClubGiveawayDesktop
         {
             List<Candidate> found = new List<Candidate>();
             HashSet<string> videoIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string[] queries = new string[]
+
+            // Broad searches catch newly emerging creators. Partner-specific
+            // searches stop a creator such as DrewCS2 from being missed simply
+            // because their video does not rank for the generic query.
+            string[] genericQueries = new string[]
             {
                 "skinclub giveaway", "skinclub cs2 giveaway", "skinclub partner giveaway", "skinclub .club giveaway"
             };
-            foreach (string q in queries)
+
+            foreach (string q in genericQueries)
             {
-                string url = "https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q);
-                string raw = await GetStringSafeAsync(url);
+                string raw = await GetStringSafeAsync("https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q));
                 found.AddRange(ExtractDirectUrls(raw, "youtube-search"));
-                MatchCollection ids = VideoIdRegex.Matches(raw);
-                foreach (Match m in ids)
+                int added = 0;
+                foreach (Match m in VideoIdRegex.Matches(raw))
                 {
-                    if (videoIds.Count >= 50) break;
-                    videoIds.Add(m.Groups[1].Value);
+                    if (videoIds.Count >= 120 || added >= 12) break;
+                    if (videoIds.Add(m.Groups[1].Value)) added++;
                 }
             }
 
-            SemaphoreSlim sem = new SemaphoreSlim(8, 8);
+            foreach (string partner in PartnerSearchNames())
+            {
+                if (videoIds.Count >= 120) break;
+                string q = partner + " skinclub";
+                string raw = await GetStringSafeAsync("https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q));
+                found.AddRange(ExtractDirectUrls(raw, "youtube-partner:" + partner));
+                int added = 0;
+                foreach (Match m in VideoIdRegex.Matches(raw))
+                {
+                    if (videoIds.Count >= 120 || added >= 2) break;
+                    if (videoIds.Add(m.Groups[1].Value)) added++;
+                }
+            }
+
+            SemaphoreSlim sem = new SemaphoreSlim(10, 10);
             List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
-            foreach (string id in videoIds.Take(50))
+            foreach (string id in videoIds.Take(120))
             {
                 tasks.Add(Task.Run(async delegate
                 {
@@ -1053,17 +1249,76 @@ namespace SkinClubGiveawayDesktop
             return found;
         }
 
+        private static async Task<List<Candidate>> DiscoverPartnerSocialsAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            HashSet<string> telegramPages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string partner in PartnerSearchNames())
+            {
+                // One public-web query per partner intentionally spans YouTube, X,
+                // Telegram, Discord, Instagram, TikTok and Twitch. Search-result
+                // snippets often expose the dated .club URL directly. Telegram
+                // result pages are also fetched below because they are publicly
+                // readable without an account.
+                string q = "\"" + partner + "\" SkinClub giveaway (YouTube OR X OR Twitter OR Telegram OR Discord OR Instagram OR TikTok OR Twitch OR Kick OR Facebook)";
+                string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=20";
+                string raw = await GetStringSafeAsync(bing);
+                found.AddRange(ExtractDirectUrls(raw, "partner-social-search:" + partner));
+
+                foreach (string socialUrl in ExtractSocialUrls(raw))
+                {
+                    if (telegramPages.Count >= 60) break;
+                    Uri u;
+                    if (!Uri.TryCreate(socialUrl, UriKind.Absolute, out u)) continue;
+                    if (!u.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (u.AbsolutePath.StartsWith("/+", StringComparison.Ordinal)) continue;
+                    telegramPages.Add(socialUrl);
+                }
+            }
+
+            // Telegram exposes public posts as ordinary web pages, so inspect the
+            // partner-search results themselves for dated creator giveaway URLs.
+            SemaphoreSlim sem = new SemaphoreSlim(8, 8);
+            List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
+            foreach (string page in telegramPages.Take(60))
+            {
+                tasks.Add(Task.Run(async delegate
+                {
+                    await sem.WaitAsync();
+                    try
+                    {
+                        string raw = await GetStringSafeAsync(page);
+                        return ExtractDirectUrls(raw, "partner-telegram");
+                    }
+                    finally { sem.Release(); }
+                }));
+            }
+            if (tasks.Count > 0)
+            {
+                List<Candidate>[] batches = await Task.WhenAll(tasks);
+                foreach (List<Candidate> batch in batches) found.AddRange(batch);
+            }
+
+            return found;
+        }
+
         private static async Task<List<Candidate>> DiscoverWebAsync()
         {
             List<Candidate> found = new List<Candidate>();
-            DateTime now = DateTime.Now;
-            string monthSlug = string.Format("01{0:00}{1:00}", now.Month, now.Year % 100);
-            string[] queries = new string[]
-            {
-                "SkinClub giveaway .club/" + monthSlug,
-                "SkinClub Tickets left .club giveaway",
-                "SkinClub Time to completion .club"
-            };
+            List<string> queries = new List<string>();
+            queries.Add("SkinClub giveaway .club Tickets left");
+            queries.Add("SkinClub Time to completion .club");
+            queries.Add("SkinClub partner giveaway .club");
+            queries.Add("site:x.com/skinclubmedia SkinClub giveaway .club");
+            queries.Add("site:x.com/skinclubpartner SkinClub giveaway .club");
+            queries.Add("site:t.me/skinclubcs2 giveaway .club");
+
+            // Search every recent DDMMYY slug instead of assuming that only
+            // 01-12 can appear at the start of the URL.
+            foreach (string slug in RecentDateSlugs(35))
+                queries.Add("\"" + slug + "\" SkinClub giveaway .club");
+
             foreach (string q in queries)
             {
                 string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=50";
@@ -1080,23 +1335,35 @@ namespace SkinClubGiveawayDesktop
             {
                 Task<List<Candidate>> telegram = DiscoverTelegramAsync();
                 Task<List<Candidate>> youtube = DiscoverYoutubeAsync();
+                Task<List<Candidate>> partnerSocials = DiscoverPartnerSocialsAsync();
                 Task<List<Candidate>> web = DiscoverWebAsync();
 
                 List<Candidate> candidates = GeneratedCandidates();
                 candidates.AddRange(await telegram);
                 candidates.AddRange(await youtube);
+                candidates.AddRange(await partnerSocials);
                 candidates.AddRange(await web);
                 foreach (GiveawayItem i in data.Items)
                     candidates.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
+
+                // Any .club domain discovered from search, Telegram, YouTube, or an
+                // existing saved item becomes probeable automatically. This prevents
+                // Deep Search from depending only on the hard-coded creator list.
+                AddDiscoveredDomainProbes(candidates);
 
                 Dictionary<string, Candidate> dedup = new Dictionary<string, Candidate>(StringComparer.OrdinalIgnoreCase);
                 foreach (Candidate c in candidates)
                 {
                     if (string.IsNullOrWhiteSpace(c.Url)) continue;
-                    dedup[c.Url.TrimEnd('/')] = c;
+                    string key = GiveawayKey(c.Url);
+                    if (key.Length == 0) continue;
+                    if (!dedup.ContainsKey(key))
+                    {
+                        dedup[key] = new Candidate(c.Creator, CleanDiscoveredUrl(c.Url), c.Source);
+                    }
                 }
                 candidates = dedup.Values.ToList();
-                HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return (x.Url ?? "").TrimEnd('/'); }), StringComparer.OrdinalIgnoreCase);
+                HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
 
                 List<GiveawayItem> useful = new List<GiveawayItem>();
                 SemaphoreSlim throttle = new SemaphoreSlim(28, 28);
@@ -1109,7 +1376,7 @@ namespace SkinClubGiveawayDesktop
                     GiveawayItem[] updates = await Task.WhenAll(tasks);
                     foreach (GiveawayItem u in updates)
                     {
-                        string key = (u.Url ?? "").TrimEnd('/');
+                        string key = GiveawayKey(u.Url);
                         if (u.Status == "active" || u.Status == "ended" || known.Contains(key)) useful.Add(u);
                     }
                 }
@@ -2313,7 +2580,7 @@ namespace SkinClubGiveawayDesktop
         private async Task DeepSearchAsync()
         {
             if (scanning) return;
-            SetScanning(true, "Deep searching YouTube, Telegram and partner sites...");
+            SetScanning(true, "Deep searching partners, YouTube, Telegram and social sources...");
             try
             {
                 data = await Scanner.DeepScanAsync(data);
