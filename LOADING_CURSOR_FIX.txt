@@ -1,0 +1,5 @@
+Loading cursor fix
+
+- Removed the form-wide Windows WaitCursor during Refresh / Deep Search.
+- Background scans still show their status text and keep relevant controls disabled.
+- Mouse hover now keeps the normal pointer instead of repeatedly showing the spinning busy circle.

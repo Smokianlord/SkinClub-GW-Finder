@@ -1,0 +1,7 @@
+SkinClub GW Finder - UI responsiveness fix
+
+- Removed all grid hover tooltip text for links, promocodes, and action icons.
+- Disabled DataGridView cell tooltips entirely.
+- Refresh, Deep Search, and manual link validation now run the scanner on worker threads.
+- Headless Chromium/CDP work can no longer block the WinForms UI thread.
+- The app no longer intentionally enables the Windows wait cursor while scanning.

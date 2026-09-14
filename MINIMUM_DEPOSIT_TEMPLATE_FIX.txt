@@ -1,0 +1,8 @@
+Minimum deposit parser update
+
+- Keeps the existing strict Step 2 parser.
+- Adds support for creator templates that use alternate wording such as refill balance / deposit / recharge.
+- Adds multilingual deposit-context words used by creator pages.
+- Accepts US$/10$ style amounts.
+- Final fallback only considers money values close to a verified participation promocode and deposit/balance wording, reducing prize-pool false positives.
+- No cursor/UI behavior changed.

@@ -1,0 +1,7 @@
+SkinClub GW Finder - Joined promocode backfill fix
+
+- Keeps the UI responsiveness/cursor changes unchanged.
+- Joined giveaways that are already ended are rechecked only when PromoCode or MinimumDeposit is missing.
+- Rendered-page metadata extraction can run for ended giveaways to backfill PromoCode/MinimumDeposit.
+- Rendered deadline/status data is still applied only to active pages, so History classification remains stable.
+- If a refresh is status-ambiguous (unknown) but successfully finds PromoCode/MinimumDeposit, those fields are now merged and saved instead of discarded.

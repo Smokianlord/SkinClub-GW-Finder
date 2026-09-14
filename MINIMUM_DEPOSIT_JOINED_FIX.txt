@@ -1,0 +1,7 @@
+Minimum Deposit / Joined fix
+
+- Expanded minimum-deposit parsing for creator templates with different wording.
+- Reads minDeposit/minimumDeposit-style values from embedded page/app JSON.
+- Scans promo/deposit-related script and browser storage data without touching hidden deadline/timer state.
+- Uses the verified participation promocode as an anchor when the deposit amount is rendered nearby.
+- Existing Joined items are refreshed through the normal saved-page refresh and missing values are persisted to data.json.

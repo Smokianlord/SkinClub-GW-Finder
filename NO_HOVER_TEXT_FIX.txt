@@ -1,0 +1,6 @@
+SkinClub GW Finder - Hover text removal
+
+- Disabled DataGridView cell tooltips entirely.
+- Removed the explicit hover text from Link and Promocode cells.
+- Removed action-button hover text as well for a clean no-tooltip UI.
+- All previous loading-cursor, promocode, minimum-deposit, history, deadline, and discovery fixes are preserved.

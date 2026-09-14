@@ -1,0 +1,15 @@
+SkinClub GW Finder - promocode fetching + compact copy UI fix
+
+Changes in this build:
+- Promocode parsing now targets the giveaway participation instructions (Take Part / Step 2).
+- Prefers the giveaway participation promo code (normally LP-...) over the separate Special Prize discount code.
+- Extracts the minimum deposit from the same participation block so prize values are not mistaken for deposits.
+- Rejects bogus UI words such as SKIN/CLUB/BONUS as promocodes.
+- Clears previously saved bogus SKIN-style promocodes on load so Refresh can replace them correctly.
+- Link copy button is now drawn inside the LINK cell, directly beside the URL. No separate copy column/divider.
+- Promocode copy button is now drawn inside the PROMOCODE cell, directly beside the code. No separate copy column/divider.
+- PROMOCODE column widened to prevent LP-* codes from being cut off.
+- Join remains an icon-only open-door action; Joined removal remains an icon-only X.
+
+Build:
+Double-click BUILD_EXE.bat. It removes any existing SkinClubGWFinder.exe and compiles a fresh one from Program.cs.

@@ -24,6 +24,8 @@ namespace SkinClubGiveawayDesktop
         public string Url { get; set; }
         public string Status { get; set; }
         public string Ticket { get; set; }
+        public string PromoCode { get; set; }
+        public string MinimumDeposit { get; set; }
         public string Deadline { get; set; }
         public string LastChecked { get; set; }
         public string Source { get; set; }
@@ -63,9 +65,18 @@ namespace SkinClubGiveawayDesktop
     {
         public string Status;
         public string Ticket;
+        public string PromoCode;
+        public string MinimumDeposit;
         public string Deadline;
         public int? Remaining;
         public int? Total;
+    }
+
+    public class RenderedFields
+    {
+        public string Deadline = "-";
+        public string PromoCode = "-";
+        public string MinimumDeposit = "-";
     }
 
     public static class DataStore
@@ -94,6 +105,16 @@ namespace SkinClubGiveawayDesktop
                 AppData data = js.Deserialize<AppData>(json);
                 if (data == null) data = DefaultData();
                 if (data.Items == null) data.Items = new List<GiveawayItem>();
+                foreach (GiveawayItem item in data.Items)
+                {
+                    if (item == null) continue;
+                    string promo = (item.PromoCode ?? "").Trim();
+                    string upper = promo.ToUpperInvariant();
+                    if (upper == "SKIN" || upper == "CLUB" || upper == "BONUS" ||
+                        upper == "PRIZE" || upper == "POOL" || upper == "DISCOUNT" ||
+                        upper == "PROMO" || upper == "PROMOCODE" || upper == "CODE")
+                        item.PromoCode = "-";
+                }
                 PruneOldHistory(data);
                 return data;
             }
@@ -198,6 +219,8 @@ namespace SkinClubGiveawayDesktop
                 Url = url,
                 Status = "unknown",
                 Ticket = "-",
+                PromoCode = "-",
+                MinimumDeposit = "-",
                 Deadline = "-",
                 Source = "seed"
             });
@@ -431,6 +454,46 @@ namespace SkinClubGiveawayDesktop
             s = Regex.Replace(s, @"\n\s*\n+", "\n");
             return s.Trim();
         }
+
+        // Participation details must come from the actual "Take part / Step 2"
+        // instructions or the Skin.Club promo link.  The page also contains a
+        // decorative "use promocode" special-prize CTA; treating the next word
+        // after that CTA as a code is what produced bogus values such as SKIN.
+        private static readonly Regex PromoQueryRegex = new Regex(
+            @"(?:utm_promo|promo_code|promocode)\s*=\s*([A-Za-z0-9][A-Za-z0-9_\-]{2,63})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ParticipationStepRegex = new Regex(
+            @"(?:replenish|top[ \t-]*up|deposit|recharge)[\s\S]{0,120}?(?:balance|account)?[\s\S]{0,60}?(?:from|minimum(?:\s+deposit)?(?:\s+of)?|at\s+least)\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])[\s\S]{0,100}?(?:promo(?:tional)?[\s_\-]*code|promocode|c[oó]digo\s*(?:promocional|promo)?)[ \t\r\n:=-]*([A-Za-z0-9][A-Za-z0-9_\-]{2,63})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex PromoCodeRegex = new Regex(
+            @"(?:promo(?:tional)?[\s_\-]*code|promocode|special[\s_\-]*code|code[\s_\-]*promo|c[oó]digo\s*(?:promocional|promo)?|use\s+(?:promo[\s_\-]*)?code|enter\s+(?:promo[\s_\-]*)?code)\s*(?:(?:for\s+participation|to\s+participate|for\s+the\s+giveaway)\s*)?(?:[:#=\-]|\bis\b)?\s*[""']?([A-Za-z0-9][A-Za-z0-9_\-]{1,63})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex MinimumDepositRegex = new Regex(
+            @"(?:(?:minimum|min\.?)[\s_\-]*(?:deposit(?:[\s_\-]+amount)?|top[\s_\-]*up(?:[\s_\-]+amount)?|recharge(?:[\s_\-]+amount)?|amount)|deposit[\s_\-]+(?:minimum|min\.?))\s*[:=\-]?\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ParticipationDepositRegex = new Regex(
+            @"(?:from|starting\s+from)\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])\s*(?:with|using)\s+(?:a\s+)?promo\s*code",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex JsonMinimumDepositRegex = new Regex(
+            @"[""']?(?:minimumDeposit|minimum_deposit|minDeposit|min_deposit|depositMinimum|deposit_minimum|minimumTopup|minimum_topup|minTopup|min_topup|minRecharge|minimumRecharge)[""']?\s*[:=]\s*[""']?\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex FlexibleDepositBeforePromoRegex = new Regex(
+            @"(?:replenish|top[ \t-]*up|deposit|recharge|add\s+funds|fund\s+(?:your\s+)?balance)[\s\S]{0,180}?(?:from|starting\s+from|at\s+least|minimum(?:\s+of)?|more\s+than|over)?\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])[\s\S]{0,180}?(?:promo(?:tional)?[\s_\-]*code|promocode|c[oó]digo)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex FlexiblePromoBeforeDepositRegex = new Regex(
+            @"(?:promo(?:tional)?[\s_\-]*code|promocode|c[oó]digo)[\s\S]{0,180}?(?:replenish|top[ \t-]*up|deposit|recharge|add\s+funds|fund\s+(?:your\s+)?balance)[\s\S]{0,120}?(?:from|starting\s+from|at\s+least|minimum(?:\s+of)?|more\s+than|over)?\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        // Creator templates are not identical. Some pages use wording such as
+        // "refill your balance with $5" or translated labels instead of the
+        // exact "minimum deposit / from $5" phrasing. These helpers are only
+        // used near a verified participation promocode so prize values elsewhere
+        // on the giveaway page are not mistaken for the deposit requirement.
+        private static readonly Regex DepositContextRegex = new Regex(
+            @"replenish|refill|top[ \t-]*up|deposit|recharge|balance|add\s+(?:funds|money)|fund\s+(?:your\s+)?balance|load\s+(?:your\s+)?balance|recarg(?:a|ar|ue)|saldo|dep[oó]sito|depositar|ingres(?:a|ar)|recarregar|carregar\s+saldo|recharg(?:e|er)|solde|einzahl(?:en|ung)|guthaben",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex MoneyAmountRegex = new Regex(
+            @"(?:(?:US|CA|AU)?[$€£]\s*[0-9]+(?:[.,][0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?\s*(?:US[$]|CA[$]|AU[$]|[$€£]|USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT))",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static int? ParseInt(string s)
         {
@@ -702,11 +765,12 @@ namespace SkinClubGiveawayDesktop
             return "";
         }
 
-        private static async Task<string> FetchRenderedDeadlineAsync(string url)
+        private static async Task<RenderedFields> FetchRenderedFieldsAsync(string url)
         {
-            if (string.IsNullOrWhiteSpace(url)) return "-";
+            RenderedFields best = new RenderedFields();
+            if (string.IsNullOrWhiteSpace(url)) return best;
             string browser = FindChromiumBrowser();
-            if (string.IsNullOrWhiteSpace(browser)) return "-";
+            if (string.IsNullOrWhiteSpace(browser)) return best;
 
             await RenderFallbackThrottle.WaitAsync();
             string profileDir = null;
@@ -767,7 +831,7 @@ namespace SkinClubGiveawayDesktop
                     if (string.IsNullOrWhiteSpace(websocketUrl)) await Task.Delay(250);
                 }
 
-                if (string.IsNullOrWhiteSpace(websocketUrl)) return "-";
+                if (string.IsNullOrWhiteSpace(websocketUrl)) return best;
 
                 // Read the text the user actually sees. The previous build scanned
                 // hidden JS/state too, which could pick an unrelated timer and produce
@@ -781,29 +845,90 @@ namespace SkinClubGiveawayDesktop
                     }
                 })()";
 
+                // Promo/deposit values are sometimes present in hidden fields or data-*
+                // attributes even when the visible page only shows a generic FAQ. Collect
+                // only relevant DOM metadata so we can find those values without using
+                // hidden timer state for the deadline.
+                string metadataExpression = @"(() => {
+                    try {
+                        const out = [];
+                        if (document.documentElement) out.push(document.documentElement.textContent || '');
+                        document.querySelectorAll('*').forEach(el => {
+                            try {
+                                if (typeof el.value === 'string' && el.value) out.push('value=' + el.value);
+                                if (el.href && /(?:utm_promo|promo_code|promocode)=/i.test(el.href)) out.push('href=' + el.href);
+                                if (!el.attributes) return;
+                                for (const a of el.attributes) {
+                                    const pair = (a.name || '') + '=' + (a.value || '');
+                                    if (/promo|code|deposit|minimum|min[-_ ]?deposit|top[-_ ]?up|recharge/i.test(pair)) out.push(pair);
+                                }
+                            } catch (_) {}
+                        });
+                        // Creator templates sometimes keep participation settings only
+                        // in JSON/application state. Read promo/deposit-related script
+                        // and storage text, but deliberately ignore timer/deadline state.
+                        document.querySelectorAll('script').forEach(s => {
+                            try {
+                                const t = s.textContent || '';
+                                if (/promo|promocode|minimumDeposit|minDeposit|minimum_deposit|min_deposit|deposit|topup|top_up|recharge/i.test(t))
+                                    out.push(t.slice(0, 60000));
+                            } catch (_) {}
+                        });
+                        try {
+                            for (let i = 0; i < localStorage.length; i++) {
+                                const k = localStorage.key(i) || '';
+                                const v = localStorage.getItem(k) || '';
+                                if (/promo|deposit|minimum|minDeposit|topup|recharge/i.test(k + ' ' + v)) out.push(k + '=' + v);
+                            }
+                        } catch (_) {}
+                        try {
+                            for (let i = 0; i < sessionStorage.length; i++) {
+                                const k = sessionStorage.key(i) || '';
+                                const v = sessionStorage.getItem(k) || '';
+                                if (/promo|deposit|minimum|minDeposit|topup|recharge/i.test(k + ' ' + v)) out.push(k + '=' + v);
+                            }
+                        } catch (_) {}
+                        return out.join('\n').slice(0, 300000);
+                    } catch (e) {
+                        return '';
+                    }
+                })()";
+
                 // The countdown is populated asynchronously. Poll the live DOM instead of
-                // taking one snapshot too early. This also captures CSS pseudo-element text
-                // and values stored in element attributes/local storage.
+                // taking one snapshot too early. Keep polling after the deadline appears so
+                // promocode/minimum-deposit fields that render slightly later are not missed.
                 DateTime renderDeadline = DateTime.UtcNow.AddSeconds(10);
                 while (DateTime.UtcNow < renderDeadline)
                 {
                     string renderedData = await DevToolsEvaluateAsync(websocketUrl, expression);
-                    if (!string.IsNullOrWhiteSpace(renderedData))
-                    {
-                        // The visible TIME TO COMPLETION timer is authoritative.
-                        string deadline = DeadlineFromRenderedCompletionText(renderedData);
-                        if (deadline != "-") return deadline;
+                    string metadata = await DevToolsEvaluateAsync(websocketUrl, metadataExpression);
 
-                        // Legacy visible countdown formats remain supported, but do not
-                        // inspect hidden timestamps/state here. Those caused the bad dates.
-                        deadline = DeadlineFromVisibleText(renderedData);
-                        if (deadline != "-") return deadline;
+                    if (!string.IsNullOrWhiteSpace(renderedData) || !string.IsNullOrWhiteSpace(metadata))
+                    {
+                        string promo = PromoCodeFromText(renderedData);
+                        if (promo == "-") promo = PromoCodeFromText(metadata);
+                        if (promo != "-") best.PromoCode = promo;
+
+                        string promoForDeposit = promo != "-" ? promo : best.PromoCode;
+                        string minDeposit = MinimumDepositFromText(renderedData, promoForDeposit);
+                        if (minDeposit == "-") minDeposit = MinimumDepositFromText(metadata, promoForDeposit);
+                        if (minDeposit != "-") best.MinimumDeposit = minDeposit;
+
+                        // The visible TIME TO COMPLETION timer is authoritative. Never use
+                        // hidden DOM state for the deadline because it previously caused
+                        // unrelated timestamps to be displayed as giveaway deadlines.
+                        string deadline = DeadlineFromRenderedCompletionText(renderedData);
+                        if (deadline == "-") deadline = DeadlineFromVisibleText(renderedData);
+                        if (deadline != "-") best.Deadline = deadline;
+
+                        if (best.Deadline != "-" && best.PromoCode != "-" && best.MinimumDeposit != "-")
+                            return best;
                     }
                     await Task.Delay(500);
                 }
-                return "-";
+                return best;
             }
-            catch { return "-"; }
+            catch { return best; }
             finally
             {
                 if (process != null)
@@ -905,6 +1030,159 @@ namespace SkinClubGiveawayDesktop
             return "-";
         }
 
+        private static bool IsClearlyInvalidPromoCode(string code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return true;
+            string upper = code.Trim().ToUpperInvariant();
+            return upper == "GET" || upper == "CODE" || upper == "PROMO" || upper == "PROMOCODE" ||
+                   upper == "SPECIAL" || upper == "COPY" || upper == "HERE" || upper == "USE" ||
+                   upper == "ENTER" || upper == "FOR" || upper == "WITH" || upper == "USING" ||
+                   upper == "THE" || upper == "EVERY" || upper == "SKIN" || upper == "CLUB" ||
+                   upper == "BONUS" || upper == "PRIZE" || upper == "POOL" || upper == "DISCOUNT";
+        }
+
+        private static string NormalizePromoCode(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "-";
+            string code = WebUtility.UrlDecode(WebUtility.HtmlDecode(raw)).Trim().Trim('"', '\'', ' ', '\t', '\r', '\n');
+            if (code.Length < 3 || code.Length > 64 || IsClearlyInvalidPromoCode(code)) return "-";
+            if (!Regex.IsMatch(code, @"^[A-Za-z0-9][A-Za-z0-9_\-]{2,63}$")) return "-";
+            return code;
+        }
+
+        private static string PromoCodeFromText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "-";
+            string decoded = WebUtility.HtmlDecode(text);
+
+            // Most reliable source: the actual participation instruction:
+            // "Replenish your balance from $8 with promo code LP-..."
+            // This deliberately comes before generic Skin.Club promo links because
+            // the page can also contain a separate "Special Prize" discount code.
+            Match step = ParticipationStepRegex.Match(decoded);
+            if (step.Success)
+            {
+                string code = NormalizePromoCode(step.Groups[2].Value);
+                if (code != "-") return code;
+            }
+
+            // Fallback to Skin.Club promo links, but prefer the giveaway
+            // participation code (normally LP-...) if multiple promo links exist.
+            string firstQueryCode = "-";
+            foreach (Match query in PromoQueryRegex.Matches(decoded))
+            {
+                string code = NormalizePromoCode(query.Groups[1].Value);
+                if (code == "-") continue;
+                if (code.StartsWith("LP-", StringComparison.OrdinalIgnoreCase)) return code;
+                if (firstQueryCode == "-") firstQueryCode = code;
+            }
+            if (firstQueryCode != "-") return firstQueryCode;
+
+            // Legacy fallback.  Require a structured value; plain UI words such
+            // as SKIN must never be accepted as promocodes.
+            foreach (Match m in PromoCodeRegex.Matches(decoded))
+            {
+                string code = NormalizePromoCode(m.Groups[1].Value);
+                if (code == "-") continue;
+                bool looksStructured = code.StartsWith("LP-", StringComparison.OrdinalIgnoreCase) ||
+                    Regex.IsMatch(code, @"[0-9_\-]");
+                if (!looksStructured) continue;
+                return code;
+            }
+            return "-";
+        }
+
+        private static string NormalizeDepositAmount(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "-";
+            string value = Regex.Replace(WebUtility.HtmlDecode(raw), @"\s+", " ").Trim();
+            if (string.IsNullOrWhiteSpace(value)) return "-";
+            return value.ToUpperInvariant();
+        }
+
+        private static string MinimumDepositFromText(string text)
+        {
+            return MinimumDepositFromText(text, null);
+        }
+
+        private static string MinimumDepositFromText(string text, string knownPromoCode)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "-";
+            string decoded = WebUtility.HtmlDecode(text);
+
+            // Most reliable source: the same Step 2 instruction that contains the
+            // participation promocode. This keeps prize-pool dollar values out.
+            Match step = ParticipationStepRegex.Match(decoded);
+            if (step.Success)
+            {
+                string amount = NormalizeDepositAmount(step.Groups[1].Value);
+                if (amount != "-") return amount;
+            }
+
+            Match m = MinimumDepositRegex.Match(decoded);
+            if (!m.Success) m = ParticipationDepositRegex.Match(decoded);
+            if (!m.Success) m = JsonMinimumDepositRegex.Match(decoded);
+            if (!m.Success) m = FlexibleDepositBeforePromoRegex.Match(decoded);
+            if (!m.Success) m = FlexiblePromoBeforeDepositRegex.Match(decoded);
+            if (m.Success)
+            {
+                string value = NormalizeDepositAmount(m.Groups[1].Value);
+                if (value != "-") return value;
+            }
+
+            // Some creator templates use different wording but still render the
+            // promocode and minimum deposit beside one another. Restrict this
+            // fallback to a window around the already-verified participation code.
+            if (!string.IsNullOrWhiteSpace(knownPromoCode) && knownPromoCode != "-")
+            {
+                int promoIndex = decoded.IndexOf(knownPromoCode, StringComparison.OrdinalIgnoreCase);
+                if (promoIndex >= 0)
+                {
+                    int start = Math.Max(0, promoIndex - 700);
+                    int length = Math.Min(decoded.Length - start, 1400);
+                    string nearby = decoded.Substring(start, length);
+
+                    // Keep the older explicit phrasing first.
+                    Match amountNearPromo = Regex.Match(nearby,
+                        @"(?:from|starting\s+from|at\s+least|minimum(?:\s+deposit)?(?:\s+of)?|more\s+than|over|for|by)\s*((?:US[$]|CA[$]|AU[$]|[$€£])?\s*[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT|[$€£])?)",
+                        RegexOptions.IgnoreCase);
+                    if (amountNearPromo.Success && DepositContextRegex.IsMatch(nearby))
+                    {
+                        string value = NormalizeDepositAmount(amountNearPromo.Groups[1].Value);
+                        if (value != "-") return value;
+                    }
+
+                    // Final safe fallback: choose the monetary amount whose local
+                    // context looks like a deposit/balance instruction and that is
+                    // closest to the verified promo code. This covers templates such
+                    // as "refill balance $5", "deposit 10$", and translated labels.
+                    int promoLocal = promoIndex - start;
+                    Match bestMoney = null;
+                    int bestDistance = int.MaxValue;
+                    foreach (Match money in MoneyAmountRegex.Matches(nearby))
+                    {
+                        int ctxStart = Math.Max(0, money.Index - 180);
+                        int ctxLength = Math.Min(nearby.Length - ctxStart, money.Length + 360);
+                        string context = nearby.Substring(ctxStart, ctxLength);
+                        if (!DepositContextRegex.IsMatch(context)) continue;
+
+                        int distance = Math.Abs((money.Index + money.Length / 2) - promoLocal);
+                        if (distance < bestDistance)
+                        {
+                            bestDistance = distance;
+                            bestMoney = money;
+                        }
+                    }
+                    if (bestMoney != null)
+                    {
+                        string value = NormalizeDepositAmount(bestMoney.Value);
+                        if (value != "-") return value;
+                    }
+                }
+            }
+            return "-";
+        }
+
         public static ParseResult ParsePage(string html)
         {
             string text = HtmlToText(html);
@@ -921,6 +1199,11 @@ namespace SkinClubGiveawayDesktop
             string ticket = (remaining.HasValue && total.HasValue)
                 ? string.Format("{0} / {1}", remaining.Value, total.Value)
                 : "-";
+            string decodedHtml = WebUtility.HtmlDecode(html);
+            string promoCode = PromoCodeFromText(decodedHtml);
+            if (promoCode == "-") promoCode = PromoCodeFromText(text);
+            string minimumDeposit = MinimumDepositFromText(text, promoCode);
+            if (minimumDeposit == "-") minimumDeposit = MinimumDepositFromText(decodedHtml, promoCode);
 
             string deadline = "-";
             bool explicitEnded = false;
@@ -972,6 +1255,8 @@ namespace SkinClubGiveawayDesktop
             {
                 Status = status,
                 Ticket = ticket,
+                PromoCode = promoCode,
+                MinimumDeposit = minimumDeposit,
                 Deadline = explicitEnded ? "Ended" : deadline,
                 Remaining = remaining,
                 Total = total
@@ -985,7 +1270,7 @@ namespace SkinClubGiveawayDesktop
             {
                 GiveawayItem item = new GiveawayItem
                 {
-                    Creator = InferCreator(c.Url, c.Creator), Url = CleanDiscoveredUrl(c.Url), Status = "unknown", Ticket = "-", Deadline = "-",
+                    Creator = InferCreator(c.Url, c.Creator), Url = CleanDiscoveredUrl(c.Url), Status = "unknown", Ticket = "-", PromoCode = "-", MinimumDeposit = "-", Deadline = "-",
                     LastChecked = DateTime.UtcNow.ToString("o"), Source = c.Source, Error = null
                 };
                 try
@@ -1001,24 +1286,35 @@ namespace SkinClubGiveawayDesktop
                     ParseResult p = ParsePage(html);
                     item.Status = p.Status;
                     item.Ticket = p.Ticket;
+                    item.PromoCode = p.PromoCode;
+                    item.MinimumDeposit = p.MinimumDeposit;
                     item.Deadline = p.Deadline;
 
                     // Current SkinClub creator pages can inject the hour countdown only
                     // after JavaScript runs. If the direct fetch has a live giveaway but
                     // no deadline, use the installed Edge/Chrome engine to render the DOM
                     // and convert the resulting remaining-hours value to a calendar date.
-                    if (string.Equals(item.Status, "active", StringComparison.OrdinalIgnoreCase) &&
-                        (item.Deadline == "-" || Regex.IsMatch(html, @"time\s*to\s*completion", RegexOptions.IgnoreCase)))
+                    bool activePage = string.Equals(item.Status, "active", StringComparison.OrdinalIgnoreCase);
+                    bool missingMetadata = item.PromoCode == "-" || item.MinimumDeposit == "-";
+                    bool needsRenderedDeadline = activePage &&
+                        (item.Deadline == "-" || Regex.IsMatch(html, @"time\s*to\s*completion", RegexOptions.IgnoreCase));
+
+                    // Promo/minimum-deposit values may also be client-rendered on already-ended
+                    // giveaways. Joined items from older builds therefore still need the rendered
+                    // metadata path even when their giveaway status is ended.
+                    if (missingMetadata || needsRenderedDeadline)
                     {
-                        string renderedDeadline = await FetchRenderedDeadlineAsync(item.Url);
-                        if (renderedDeadline != "-")
+                        RenderedFields rendered = await FetchRenderedFieldsAsync(item.Url);
+                        if (rendered.PromoCode != "-") item.PromoCode = rendered.PromoCode;
+                        if (rendered.MinimumDeposit != "-") item.MinimumDeposit = rendered.MinimumDeposit;
+
+                        // Only let rendered timer data alter the deadline/status for a page that
+                        // was parsed as active. For ended/unknown pages we are here solely to
+                        // backfill metadata, avoiding the old deadline reclassification problem.
+                        if (activePage && rendered.Deadline != "-")
                         {
-                            item.Deadline = renderedDeadline;
-                            // The rendered page is authoritative for completion state.
-                            // Previously a page showing "Tiempo restante: FIN" / "END"
-                            // only changed the Deadline text while leaving Status=active,
-                            // so ended giveaways never moved into History.
-                            if (string.Equals(renderedDeadline, "Ended", StringComparison.OrdinalIgnoreCase))
+                            item.Deadline = rendered.Deadline;
+                            if (string.Equals(rendered.Deadline, "Ended", StringComparison.OrdinalIgnoreCase))
                                 item.Status = "ended";
                         }
                     }
@@ -1053,6 +1349,16 @@ namespace SkinClubGiveawayDesktop
                         (string.Equals(existing.Status, "active", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(existing.Status, "ended", StringComparison.OrdinalIgnoreCase)))
                     {
+                        // Keep the known classification, but do not discard metadata that the
+                        // rendered-page fallback successfully recovered. This is especially
+                        // important for Joined items saved before promocode/deposit support.
+                        if (!string.IsNullOrWhiteSpace(u.PromoCode) && u.PromoCode != "-")
+                            existing.PromoCode = u.PromoCode;
+                        if (!string.IsNullOrWhiteSpace(u.MinimumDeposit) && u.MinimumDeposit != "-")
+                            existing.MinimumDeposit = u.MinimumDeposit;
+                        if (!string.IsNullOrWhiteSpace(u.Ticket) && u.Ticket != "-")
+                            existing.Ticket = u.Ticket;
+
                         existing.LastChecked = u.LastChecked;
                         existing.Error = u.Error;
                         if (!string.IsNullOrWhiteSpace(u.Source)) existing.Source = u.Source;
@@ -1065,7 +1371,12 @@ namespace SkinClubGiveawayDesktop
                         existing.Creator = u.Creator;
                         existing.Url = CleanDiscoveredUrl(u.Url);
                         existing.Status = u.Status;
-                        existing.Ticket = u.Ticket; existing.Deadline = u.Deadline; existing.LastChecked = u.LastChecked;
+                        existing.Ticket = u.Ticket;
+                        if (!string.IsNullOrWhiteSpace(u.PromoCode) && u.PromoCode != "-") existing.PromoCode = u.PromoCode;
+                        else if (string.IsNullOrWhiteSpace(existing.PromoCode)) existing.PromoCode = "-";
+                        if (!string.IsNullOrWhiteSpace(u.MinimumDeposit) && u.MinimumDeposit != "-") existing.MinimumDeposit = u.MinimumDeposit;
+                        else if (string.IsNullOrWhiteSpace(existing.MinimumDeposit)) existing.MinimumDeposit = "-";
+                        existing.Deadline = u.Deadline; existing.LastChecked = u.LastChecked;
                         existing.Source = u.Source; existing.Error = u.Error;
 
                         if (isEnded)
@@ -1102,7 +1413,17 @@ namespace SkinClubGiveawayDesktop
                     // them on every app launch can reclassify or delay History
                     // unnecessarily. Keep them persisted until normal retention
                     // cleanup removes them. Active/unknown items still refresh.
-                    if (string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Normal History entries stay persisted and are not revalidated on
+                        // every launch. Joined entries are different: older saved items may
+                        // predate the promocode/minimum-deposit fields, so allow a metadata
+                        // backfill only while one of those fields is still missing.
+                        bool missingJoinedMetadata = i.Joined &&
+                            (string.IsNullOrWhiteSpace(i.PromoCode) || i.PromoCode == "-" ||
+                             string.IsNullOrWhiteSpace(i.MinimumDeposit) || i.MinimumDeposit == "-");
+                        if (!missingJoinedMetadata) continue;
+                    }
                     cs.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
                 }
                 SemaphoreSlim throttle = new SemaphoreSlim(20, 20);
@@ -1985,7 +2306,7 @@ namespace SkinClubGiveawayDesktop
             filterFieldBox.BackColor = Surface3;
             filterFieldBox.ForeColor = TextColor;
             filterFieldBox.Font = new Font("Segoe UI", 8.7F);
-            filterFieldBox.Items.AddRange(new object[] { "Creator name", "All fields", "URL", "Ticket", "Deadline" });
+            filterFieldBox.Items.AddRange(new object[] { "Creator name", "All fields", "URL", "Ticket", "Promocode", "Minimum deposit", "Deadline" });
             filterFieldBox.SelectedIndex = 0;
             filterFieldBox.SelectedIndexChanged += delegate { if (grid != null) Render(); };
             filterPanel.Controls.Add(filterFieldBox, 1, 0);
@@ -2041,11 +2362,12 @@ namespace SkinClubGiveawayDesktop
             grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(16, 24, 39);
             grid.RowTemplate.Height = 52;
             grid.AutoGenerateColumns = false;
+            grid.ShowCellToolTips = false;
 
             DataGridViewTextBoxColumn creator = new DataGridViewTextBoxColumn();
             creator.Name = "Creator";
             creator.HeaderText = "CREATOR";
-            creator.Width = 185;
+            creator.Width = 155;
             creator.MinimumWidth = 145;
             creator.SortMode = DataGridViewColumnSortMode.Programmatic;
 
@@ -2053,59 +2375,72 @@ namespace SkinClubGiveawayDesktop
             link.Name = "Link";
             link.HeaderText = "LINK";
             link.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
-            link.MinimumWidth = 280;
+            link.MinimumWidth = 210;
             link.LinkColor = Color.FromArgb(125, 211, 252);
             link.ActiveLinkColor = Color.White;
             link.VisitedLinkColor = Color.FromArgb(125, 211, 252);
             link.TrackVisitedState = false;
             link.SortMode = DataGridViewColumnSortMode.Programmatic;
 
+            // Copy icon is painted inside the LINK cell so it sits immediately
+            // beside the URL without wasting a separate divider/column.
+            link.DefaultCellStyle.Padding = new Padding(8, 0, 38, 0);
+
             DataGridViewTextBoxColumn ticket = new DataGridViewTextBoxColumn();
             ticket.Name = "Ticket";
             ticket.HeaderText = "TICKET";
-            ticket.Width = 130;
+            ticket.Width = 110;
             ticket.SortMode = DataGridViewColumnSortMode.Programmatic;
             ticket.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
+
+            DataGridViewTextBoxColumn promo = new DataGridViewTextBoxColumn();
+            promo.Name = "PromoCode";
+            promo.HeaderText = "PROMOCODE";
+            promo.Width = 220;
+            promo.MinimumWidth = 190;
+            promo.SortMode = DataGridViewColumnSortMode.Programmatic;
+            // Reserve room for the inline copy icon.
+            promo.DefaultCellStyle.Padding = new Padding(8, 0, 38, 0);
+
+            DataGridViewTextBoxColumn minimumDeposit = new DataGridViewTextBoxColumn();
+            minimumDeposit.Name = "MinimumDeposit";
+            minimumDeposit.HeaderText = "MINIMUM DEPOSIT";
+            minimumDeposit.Width = 120;
+            minimumDeposit.SortMode = DataGridViewColumnSortMode.Programmatic;
 
             DataGridViewTextBoxColumn deadline = new DataGridViewTextBoxColumn();
             deadline.Name = "Deadline";
             deadline.HeaderText = "DEADLINE";
-            deadline.Width = 150;
+            deadline.Width = 135;
             deadline.SortMode = DataGridViewColumnSortMode.Programmatic;
 
-            DataGridViewButtonColumn copy = new DataGridViewButtonColumn();
-            copy.Name = "Copy";
-            copy.HeaderText = "";
-            copy.Text = "Copy";
-            copy.UseColumnTextForButtonValue = true;
-            copy.Width = 72;
-            copy.FlatStyle = FlatStyle.Flat;
-            copy.SortMode = DataGridViewColumnSortMode.NotSortable;
-            copy.DefaultCellStyle.BackColor = Surface3;
-            copy.DefaultCellStyle.ForeColor = TextColor;
-            copy.DefaultCellStyle.SelectionBackColor = Surface3;
-            copy.DefaultCellStyle.SelectionForeColor = TextColor;
-            copy.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            DataGridViewButtonColumn joinedAction = MakeIconColumn("JoinedAction", 48);
 
-            DataGridViewButtonColumn joinedAction = new DataGridViewButtonColumn();
-            joinedAction.Name = "JoinedAction";
-            joinedAction.HeaderText = "";
-            joinedAction.Width = 82;
-            joinedAction.FlatStyle = FlatStyle.Flat;
-            joinedAction.SortMode = DataGridViewColumnSortMode.NotSortable;
-            joinedAction.DefaultCellStyle.BackColor = Surface3;
-            joinedAction.DefaultCellStyle.ForeColor = TextColor;
-            joinedAction.DefaultCellStyle.SelectionBackColor = Surface3;
-            joinedAction.DefaultCellStyle.SelectionForeColor = TextColor;
-            joinedAction.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-
-            grid.Columns.AddRange(new DataGridViewColumn[] { creator, link, ticket, deadline, copy, joinedAction });
-            grid.CellContentClick += GridCellContentClick;
+            grid.Columns.AddRange(new DataGridViewColumn[] { creator, link, ticket, promo, minimumDeposit, deadline, joinedAction });
+            grid.CellMouseClick += GridCellMouseClick;
             grid.CellPainting += GridCellPainting;
             grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
             card.Controls.Add(grid, 0, 2);
 
             ResumeLayout(true);
+        }
+
+        private DataGridViewButtonColumn MakeIconColumn(string name, int width)
+        {
+            DataGridViewButtonColumn column = new DataGridViewButtonColumn();
+            column.Name = name;
+            column.HeaderText = "";
+            column.Text = "";
+            column.UseColumnTextForButtonValue = true;
+            column.Width = width;
+            column.FlatStyle = FlatStyle.Flat;
+            column.SortMode = DataGridViewColumnSortMode.NotSortable;
+            column.DefaultCellStyle.BackColor = Surface3;
+            column.DefaultCellStyle.ForeColor = TextColor;
+            column.DefaultCellStyle.SelectionBackColor = Surface3;
+            column.DefaultCellStyle.SelectionForeColor = TextColor;
+            column.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            return column;
         }
 
         private Button MakeHeaderButton(string text, int width, bool emphasis)
@@ -2180,7 +2515,7 @@ namespace SkinClubGiveawayDesktop
         {
             if (e.ColumnIndex < 0) return;
             DataGridViewColumn c = grid.Columns[e.ColumnIndex];
-            if (c.SortMode == DataGridViewColumnSortMode.NotSortable || c.Name == "Copy" || c.Name == "JoinedAction") return;
+            if (c.SortMode == DataGridViewColumnSortMode.NotSortable || c.Name == "JoinedAction") return;
 
             if (string.Equals(sortColumn, c.Name, StringComparison.OrdinalIgnoreCase))
                 sortAscending = !sortAscending;
@@ -2192,38 +2527,127 @@ namespace SkinClubGiveawayDesktop
             Render();
         }
 
+        private Rectangle InlineCopyButtonRect(int columnIndex, int rowIndex, Rectangle cellBounds)
+        {
+            int size = Math.Min(28, Math.Max(24, cellBounds.Height - 18));
+            int maxX = cellBounds.Right - size - 7;
+            int x = maxX;
+
+            try
+            {
+                DataGridViewCell cell = grid.Rows[rowIndex].Cells[columnIndex];
+                string text = Convert.ToString(cell.FormattedValue) ?? "";
+                Font font = cell.InheritedStyle.Font ?? grid.Font;
+                int textWidth = TextRenderer.MeasureText(text, font, new Size(int.MaxValue, cellBounds.Height),
+                    TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width;
+                // Put the icon immediately after the visible value when there is
+                // room; clamp it to the right edge for long URLs/codes.
+                x = Math.Min(maxX, cellBounds.Left + 8 + textWidth + 5);
+            }
+            catch { x = maxX; }
+
+            return new Rectangle(
+                x,
+                cellBounds.Y + (cellBounds.Height - size) / 2,
+                size, size);
+        }
+
+        private void DrawCopyIconButton(Graphics graphics, Rectangle r)
+        {
+            Color top = MixColor(Surface3, Accent2, 0.38);
+            Color bottom = MixColor(Bg, Accent2, 0.18);
+            using (GraphicsPath path = MakeRoundedPath(r, 5))
+            using (LinearGradientBrush fill = new LinearGradientBrush(r, top, bottom, LinearGradientMode.Vertical))
+            using (Pen border = new Pen(MixColor(Accent2, Color.White, 0.05)))
+            {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                graphics.FillPath(fill, path);
+                graphics.DrawPath(border, path);
+            }
+
+            using (Pen iconPen = new Pen(Color.White, 1.6F))
+            {
+                iconPen.StartCap = LineCap.Round;
+                iconPen.EndCap = LineCap.Round;
+                Rectangle back = new Rectangle(r.Left + 7, r.Top + 6, 9, 11);
+                Rectangle front = new Rectangle(r.Left + 11, r.Top + 10, 9, 11);
+                graphics.DrawRectangle(iconPen, back);
+                graphics.DrawRectangle(iconPen, front);
+            }
+        }
+
         private void GridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
             string name = grid.Columns[e.ColumnIndex].Name;
-            if (name != "Copy" && name != "JoinedAction") return;
+
+            // LINK and PROMOCODE keep their normal text/link cell and get a small
+            // copy button painted inside the same cell.  No extra copy column,
+            // therefore no extra divider or wasted width.
+            if (name == "Link" || name == "PromoCode")
+            {
+                e.Paint(e.CellBounds, DataGridViewPaintParts.All);
+                if (name == "PromoCode")
+                {
+                    GiveawayItem item = grid.Rows[e.RowIndex].Tag as GiveawayItem;
+                    if (item == null || string.IsNullOrWhiteSpace(item.PromoCode) || item.PromoCode == "-")
+                    {
+                        e.Handled = true;
+                        return;
+                    }
+                }
+                DrawCopyIconButton(e.Graphics, InlineCopyButtonRect(e.ColumnIndex, e.RowIndex, e.CellBounds));
+                e.Handled = true;
+                return;
+            }
+
+            if (name != "JoinedAction") return;
 
             e.PaintBackground(e.CellBounds, true);
-            string text = Convert.ToString(e.FormattedValue) ?? "";
-            Color accent = name == "Copy" ? Accent2 : (showingJoined ? Danger : Success);
+            int size = Math.Min(32, Math.Max(22, e.CellBounds.Height - 16));
+            Rectangle r = new Rectangle(
+                e.CellBounds.X + (e.CellBounds.Width - size) / 2,
+                e.CellBounds.Y + (e.CellBounds.Height - size) / 2,
+                size, size);
 
-            Rectangle r = new Rectangle(e.CellBounds.X + 8, e.CellBounds.Y + 9,
-                Math.Max(20, e.CellBounds.Width - 16), Math.Max(20, e.CellBounds.Height - 18));
-            Rectangle shadow = new Rectangle(r.X + 1, r.Y + 3, r.Width, Math.Max(1, r.Height - 1));
-            using (GraphicsPath shadowPath = MakeRoundedPath(shadow, 5))
-            using (SolidBrush sb = new SolidBrush(Color.FromArgb(85, 0, 0, 0)))
-                e.Graphics.FillPath(sb, shadowPath);
-
-            Color top = MixColor(Surface3, accent, 0.55);
-            Color bottom = MixColor(Bg, accent, 0.25);
+            Color accent = showingJoined ? Danger : Success;
+            Color top = MixColor(Surface3, accent, 0.38);
+            Color bottom = MixColor(Bg, accent, 0.18);
             using (GraphicsPath path = MakeRoundedPath(r, 5))
             using (LinearGradientBrush fill = new LinearGradientBrush(r, top, bottom, LinearGradientMode.Vertical))
-            using (Pen border = new Pen(MixColor(accent, Color.White, 0.08)))
+            using (Pen border = new Pen(MixColor(accent, Color.White, 0.05)))
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 e.Graphics.FillPath(fill, path);
                 e.Graphics.DrawPath(border, path);
             }
-            using (Pen hi = new Pen(Color.FromArgb(65, 255, 255, 255)))
-                e.Graphics.DrawLine(hi, r.Left + 6, r.Top + 1, r.Right - 6, r.Top + 1);
 
-            TextRenderer.DrawText(e.Graphics, text, new Font("Segoe UI Semibold", 8.2F), r, Color.White,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            using (Pen iconPen = new Pen(Color.White, 1.7F))
+            {
+                iconPen.StartCap = LineCap.Round;
+                iconPen.EndCap = LineCap.Round;
+                if (showingJoined)
+                {
+                    int pad = 9;
+                    e.Graphics.DrawLine(iconPen, r.Left + pad, r.Top + pad, r.Right - pad, r.Bottom - pad);
+                    e.Graphics.DrawLine(iconPen, r.Right - pad, r.Top + pad, r.Left + pad, r.Bottom - pad);
+                }
+                else
+                {
+                    Rectangle frame = new Rectangle(r.Left + 8, r.Top + 6, 13, 18);
+                    e.Graphics.DrawRectangle(iconPen, frame);
+                    Point[] door = new Point[]
+                    {
+                        new Point(r.Left + 12, r.Top + 8),
+                        new Point(r.Left + 22, r.Top + 11),
+                        new Point(r.Left + 22, r.Top + 22),
+                        new Point(r.Left + 12, r.Top + 24)
+                    };
+                    e.Graphics.DrawPolygon(iconPen, door);
+                    using (SolidBrush knob = new SolidBrush(Color.White))
+                        e.Graphics.FillEllipse(knob, r.Left + 18, r.Top + 15, 2, 2);
+                }
+            }
             e.Handled = true;
         }
 
@@ -2239,15 +2663,17 @@ namespace SkinClubGiveawayDesktop
             return path;
         }
 
-        private void GridCellContentClick(object sender, DataGridViewCellEventArgs e)
+        private void GridCellMouseClick(object sender, DataGridViewCellMouseEventArgs e)
         {
-            if (e.RowIndex < 0) return;
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
             GiveawayItem item = grid.Rows[e.RowIndex].Tag as GiveawayItem;
-            string url = Convert.ToString(grid.Rows[e.RowIndex].Cells["Link"].Value);
+            if (item == null) return;
 
-            if (e.ColumnIndex == grid.Columns["JoinedAction"].Index)
+            string columnName = grid.Columns[e.ColumnIndex].Name;
+            string url = item.Url ?? "";
+
+            if (columnName == "JoinedAction")
             {
-                if (item == null) return;
                 if (showingJoined)
                 {
                     item.Joined = false;
@@ -2274,24 +2700,60 @@ namespace SkinClubGiveawayDesktop
                 return;
             }
 
-            if (e.ColumnIndex == grid.Columns["Copy"].Index)
+            if (columnName == "Link" || columnName == "PromoCode")
             {
-                if (!string.IsNullOrWhiteSpace(url))
+                Rectangle cellBounds = grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false);
+                Rectangle copyRect = InlineCopyButtonRect(e.ColumnIndex, e.RowIndex, cellBounds);
+                Point clickPoint = new Point(cellBounds.X + e.X, cellBounds.Y + e.Y);
+                bool copyHit = copyRect.Contains(clickPoint);
+                if (copyHit)
                 {
-                    Clipboard.SetText(url);
-                    scanStatus.Text = "Link copied to clipboard";
-                    scanStatus.ForeColor = Success;
-                    Task.Delay(1400).ContinueWith(delegate
+                    if (columnName == "Link")
                     {
-                        try { BeginInvoke(new Action(delegate { if (!scanning) { scanStatus.Text = "Ready"; scanStatus.ForeColor = Muted; } })); }
-                        catch { }
-                    });
+                        CopyToClipboard(url, "Link copied to clipboard");
+                    }
+                    else
+                    {
+                        string promo = item.PromoCode ?? "";
+                        if (!string.IsNullOrWhiteSpace(promo) && promo != "-")
+                            CopyToClipboard(promo, "Promocode copied to clipboard");
+                        else
+                        {
+                            scanStatus.Text = "No promocode available";
+                            scanStatus.ForeColor = Muted;
+                        }
+                    }
+                    return;
+                }
+
+                if (columnName == "Link" && !string.IsNullOrWhiteSpace(url))
+                {
+                    try { Process.Start(url); } catch { }
                 }
             }
-            else if (e.ColumnIndex == grid.Columns["Link"].Index && !string.IsNullOrWhiteSpace(url))
+        }
+
+        private void CopyToClipboard(string value, string message)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            Clipboard.SetText(value);
+            scanStatus.Text = message;
+            scanStatus.ForeColor = Success;
+            Task.Delay(1400).ContinueWith(delegate
             {
-                try { Process.Start(url); } catch { }
-            }
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        if (!scanning)
+                        {
+                            scanStatus.Text = "Ready";
+                            scanStatus.ForeColor = Muted;
+                        }
+                    }));
+                }
+                catch { }
+            });
         }
 
         private List<GiveawayItem> CurrentItems()
@@ -2328,12 +2790,18 @@ namespace SkinClubGiveawayDesktop
                         return (i.Url ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
                     if (string.Equals(field, "Ticket", StringComparison.OrdinalIgnoreCase))
                         return (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (string.Equals(field, "Promocode", StringComparison.OrdinalIgnoreCase))
+                        return (i.PromoCode ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (string.Equals(field, "Minimum deposit", StringComparison.OrdinalIgnoreCase))
+                        return (i.MinimumDeposit ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
                     if (string.Equals(field, "Deadline", StringComparison.OrdinalIgnoreCase))
                         return (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
 
                     return (i.Creator ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
                            (i.Url ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
                            (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           (i.PromoCode ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           (i.MinimumDeposit ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
                            (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
                 }).ToList();
             }
@@ -2364,6 +2832,14 @@ namespace SkinClubGiveawayDesktop
                 bool bh = TryDeadlineDate(b, out bd);
                 if (ah != bh) return ah ? -1 : 1;
                 if (ah && bh) cmp = ad.CompareTo(bd);
+            }
+            else if (string.Equals(sortColumn, "PromoCode", StringComparison.OrdinalIgnoreCase))
+            {
+                cmp = string.Compare(a.PromoCode ?? "", b.PromoCode ?? "", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (string.Equals(sortColumn, "MinimumDeposit", StringComparison.OrdinalIgnoreCase))
+            {
+                cmp = string.Compare(a.MinimumDeposit ?? "", b.MinimumDeposit ?? "", StringComparison.OrdinalIgnoreCase);
             }
             else if (string.Equals(sortColumn, "Link", StringComparison.OrdinalIgnoreCase))
             {
@@ -2462,7 +2938,7 @@ namespace SkinClubGiveawayDesktop
             if (showingJoined)
             {
                 viewTitle.Text = "Joined giveaways";
-                viewSubtitle.Text = "Only joined giveaways appear here • REMOVE returns each item to its Active or History list";
+                viewSubtitle.Text = "Only joined giveaways appear here • use the × button to return an item to Active or History";
             }
             else if (showingHistory)
             {
@@ -2485,14 +2961,17 @@ namespace SkinClubGiveawayDesktop
                 string deadline = i.Deadline ?? "-";
                 if ((showingHistory || showingJoined) && ended && (string.IsNullOrWhiteSpace(deadline) || deadline == "-")) deadline = "ENDED";
                 if (!string.IsNullOrWhiteSpace(deadline) && deadline != "-") deadline = deadline.ToUpperInvariant();
-                string actionText = showingJoined ? "REMOVE" : "JOIN";
-                int row = grid.Rows.Add(i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", deadline, "COPY", actionText);
+                string promoCode = string.IsNullOrWhiteSpace(i.PromoCode) ? "-" : i.PromoCode;
+                string minimumDeposit = string.IsNullOrWhiteSpace(i.MinimumDeposit) ? "-" : i.MinimumDeposit;
+                int row = grid.Rows.Add(i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", promoCode, minimumDeposit, deadline, "");
                 grid.Rows[row].Tag = i;
                 grid.Rows[row].Cells["Creator"].Style.Font = new Font("Segoe UI Semibold", 9.4F);
                 grid.Rows[row].Cells["Ticket"].Style.Font = new Font("Segoe UI Semibold", 9.2F);
 
                 bool activeLike = string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase);
                 grid.Rows[row].Cells["Ticket"].Style.ForeColor = Muted;
+                grid.Rows[row].Cells["PromoCode"].Style.ForeColor = promoCode == "-" ? Muted : TextColor;
+                grid.Rows[row].Cells["MinimumDeposit"].Style.ForeColor = minimumDeposit == "-" ? Muted : TextColor;
                 grid.Rows[row].Cells["Deadline"].Style.ForeColor = Muted;
                 if (ended) grid.Rows[row].DefaultCellStyle.ForeColor = Color.FromArgb(183, 193, 208);
 
@@ -2519,22 +2998,11 @@ namespace SkinClubGiveawayDesktop
                         grid.Rows[row].Cells["Deadline"].Style.ForeColor = PriorityGreen;
                 }
 
-                grid.Rows[row].Cells["Copy"].Style.BackColor = MixColor(Surface3, Accent2, 0.12);
-                grid.Rows[row].Cells["Copy"].Style.ForeColor = Color.White;
-                grid.Rows[row].Cells["Copy"].Style.SelectionBackColor = MixColor(Surface3, Accent2, 0.18);
 
                 if (showingJoined)
-                {
-                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Danger, 0.12);
-                    grid.Rows[row].Cells["JoinedAction"].Style.ForeColor = Color.White;
-                    grid.Rows[row].Cells["JoinedAction"].Style.SelectionBackColor = MixColor(Surface3, Danger, 0.18);
-                }
+                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Danger, 0.08);
                 else
-                {
-                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Success, 0.12);
-                    grid.Rows[row].Cells["JoinedAction"].Style.ForeColor = Color.White;
-                    grid.Rows[row].Cells["JoinedAction"].Style.SelectionBackColor = MixColor(Surface3, Success, 0.18);
-                }
+                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Success, 0.08);
             }
             UpdateSortGlyph();
             grid.ResumeLayout();
@@ -2567,7 +3035,12 @@ namespace SkinClubGiveawayDesktop
             joinedButton.Enabled = !value;
             scanStatus.Text = value ? message : "Ready";
             scanStatus.ForeColor = value ? Warning : Muted;
-            Cursor = value ? Cursors.WaitCursor : Cursors.Default;
+
+            // Never force the Windows busy cursor. Scanning is done on a worker
+            // thread, so the UI message pump stays responsive while the status bar
+            // reports progress. Keep each control's normal cursor (hand/default).
+            UseWaitCursor = false;
+            Cursor = Cursors.Default;
         }
 
         private async Task RefreshAsync(bool manual)
@@ -2576,7 +3049,14 @@ namespace SkinClubGiveawayDesktop
             SetScanning(true, manual ? "Checking saved giveaway pages..." : "Refreshing live status...");
             try
             {
-                data = await Scanner.RefreshSavedAsync(data);
+                // Some giveaway pages require a headless Chromium/CDP fallback.
+                // Run the entire scan away from the WinForms UI thread so Chromium
+                // startup/parsing can never make Windows show the spinning busy cursor.
+                AppData currentData = data;
+                data = await Task.Run(async delegate
+                {
+                    return await Scanner.RefreshSavedAsync(currentData);
+                });
                 Render();
             }
             catch (Exception ex)
@@ -2592,7 +3072,11 @@ namespace SkinClubGiveawayDesktop
             SetScanning(true, "Deep searching partners, YouTube, Telegram and social sources...");
             try
             {
-                data = await Scanner.DeepScanAsync(data);
+                AppData currentData = data;
+                data = await Task.Run(async delegate
+                {
+                    return await Scanner.DeepScanAsync(currentData);
+                });
                 Render();
                 int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
                 scanStatus.Text = "Deep Search complete  •  " + ac + " active giveaway" + (ac == 1 ? "" : "s");
@@ -2615,7 +3099,12 @@ namespace SkinClubGiveawayDesktop
                 SetScanning(true, "Validating giveaway page...");
                 try
                 {
-                    GiveawayItem item = await Scanner.ValidateOneAsync(f.CreatorName, f.GiveawayUrl);
+                    string creatorName = f.CreatorName;
+                    string giveawayUrl = f.GiveawayUrl;
+                    GiveawayItem item = await Task.Run(async delegate
+                    {
+                        return await Scanner.ValidateOneAsync(creatorName, giveawayUrl);
+                    });
                     Scanner.MergeOne(data, item);
                     Render();
                     if (item.Status == "active")

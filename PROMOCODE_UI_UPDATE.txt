@@ -1,0 +1,16 @@
+SkinClub GW Finder - Promocode UI Update
+
+Columns:
+CREATOR | LINK | [copy] | TICKET | PROMOCODE | [copy] | MINIMUM DEPOSIT | DEADLINE | [action]
+
+Changes:
+- Promocode and minimum-deposit values are saved in data.json.
+- Link copy button is icon-only and sits directly beside LINK.
+- Promocode copy button is icon-only and sits directly beside PROMOCODE.
+- Join is an icon-only open-door button.
+- Remove from Joined is an icon-only X button.
+- Promocode/minimum-deposit extraction checks visible text plus relevant rendered DOM attributes.
+- Existing ticket/deadline priority colors and History persistence behavior are preserved.
+
+Build:
+Double-click BUILD_EXE.bat on Windows.
