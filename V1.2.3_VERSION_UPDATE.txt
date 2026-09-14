@@ -1,0 +1,4 @@
+v1.2.3 update
+- App window title updated to SkinClub GW Finder v1.2.3
+- Main header updated to SkinClub GW Finder v1.2.3
+- Assembly/File version updated to 1.2.3.0

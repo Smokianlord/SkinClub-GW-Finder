@@ -34,3 +34,8 @@ All notable changes to SkinClub GW Finder will be documented in this file.
 - Prevented animated copy confirmation from taking window focus.
 - Reduced Deep Search brute-force probing and parallelized discovery requests.
 - Prevented unnecessary Chromium/CDP rendering for guessed non-giveaway URLs.
+
+## v1.2.2 resource hotfix
+- Fixed excessive CPU/RAM usage during Deep Search caused by concurrent headless Chromium fallback processes.
+- Serialized rendered-page checks, lowered scan concurrency, added short-lived render caching, and ensured spawned browser process trees are cleaned up.
+- Giveaway discovery coverage is unchanged.

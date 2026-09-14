@@ -1,0 +1,9 @@
+SkinClub GW Finder v1.2.2 - Deep Search resource fix
+
+- Limits the JavaScript-render fallback to a maximum of five hidden Chromium instances at a time.
+- Runs the app-launched browser at BelowNormal process priority.
+- Disables image loading and unnecessary Chromium background features for hidden rendering.
+- Reduces network-validation concurrency to prevent CPU/RAM/network spikes.
+- Caches rendered giveaway metadata for 10 minutes to avoid repeating expensive browser work.
+- Terminates the complete hidden Chromium process tree after each render so orphaned browser processes cannot accumulate.
+- Keeps the same giveaway discovery sources and candidate coverage; this changes resource scheduling, not what Deep Search searches.

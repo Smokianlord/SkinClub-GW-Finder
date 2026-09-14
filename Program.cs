@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -10,6 +10,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -21,8 +22,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("SkinClub GW Finder")]
 [assembly: AssemblyProduct("SkinClub GW Finder")]
 [assembly: AssemblyDescription("SkinClub creator giveaway monitor")]
-[assembly: AssemblyVersion("1.2.2.0")]
-[assembly: AssemblyFileVersion("1.2.2.0")]
+[assembly: AssemblyVersion("1.2.3.0")]
+[assembly: AssemblyFileVersion("1.2.3.0")]
 [assembly: AssemblyInformationalVersion("1.2.2")]
 
 namespace SkinClubGiveawayDesktop
@@ -236,6 +237,197 @@ namespace SkinClubGiveawayDesktop
         }
     }
 
+    // Owns every Chromium/Edge process launched by this application.
+    // The Windows Job Object has KILL_ON_JOB_CLOSE enabled, so Windows itself
+    // terminates all browser child processes if the app closes or crashes.
+    // We also keep the root Process handles so a normal FormClosing can clean
+    // them up immediately instead of leaving background giveaway tabs behind.
+    public static class BrowserProcessManager
+    {
+        private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+        private const int JobObjectExtendedLimitInformation = 9;
+        private static readonly object Gate = new object();
+        private static readonly Dictionary<int, Process> Tracked = new Dictionary<int, Process>();
+        private static IntPtr jobHandle = IntPtr.Zero;
+        private static bool initialized = false;
+        private static bool shuttingDown = false;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public long Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IO_COUNTERS
+        {
+            public ulong ReadOperationCount;
+            public ulong WriteOperationCount;
+            public ulong OtherOperationCount;
+            public ulong ReadTransferCount;
+            public ulong WriteTransferCount;
+            public ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        {
+            public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+            public IO_COUNTERS IoInfo;
+            public UIntPtr ProcessMemoryLimit;
+            public UIntPtr JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetInformationJobObject(IntPtr hJob, int infoType, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        private static void EnsureJobLocked()
+        {
+            if (initialized) return;
+            initialized = true;
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+
+            IntPtr created = IntPtr.Zero;
+            IntPtr infoPtr = IntPtr.Zero;
+            try
+            {
+                created = CreateJobObject(IntPtr.Zero, null);
+                if (created == IntPtr.Zero) return;
+
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+                infoPtr = Marshal.AllocHGlobal(length);
+                Marshal.StructureToPtr(info, infoPtr, false);
+                if (!SetInformationJobObject(created, JobObjectExtendedLimitInformation, infoPtr, (uint)length))
+                {
+                    CloseHandle(created);
+                    created = IntPtr.Zero;
+                    return;
+                }
+                jobHandle = created;
+                created = IntPtr.Zero;
+            }
+            catch
+            {
+                if (created != IntPtr.Zero) try { CloseHandle(created); } catch { }
+            }
+            finally
+            {
+                if (infoPtr != IntPtr.Zero) Marshal.FreeHGlobal(infoPtr);
+            }
+        }
+
+        public static void Register(Process process)
+        {
+            if (process == null) return;
+            lock (Gate)
+            {
+                if (shuttingDown) return;
+                EnsureJobLocked();
+                try
+                {
+                    int pid = process.Id;
+                    Tracked[pid] = process;
+                    if (jobHandle != IntPtr.Zero && !process.HasExited)
+                        AssignProcessToJobObject(jobHandle, process.Handle);
+                }
+                catch { }
+            }
+        }
+
+        private static void Unregister(Process process)
+        {
+            if (process == null) return;
+            lock (Gate)
+            {
+                try { Tracked.Remove(process.Id); } catch { }
+            }
+        }
+
+        private static void TaskKillTree(Process process)
+        {
+            if (process == null) return;
+            int pid = 0;
+            try { pid = process.Id; } catch { }
+            if (pid <= 0 || Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            try
+            {
+                ProcessStartInfo killInfo = new ProcessStartInfo();
+                killInfo.FileName = "taskkill.exe";
+                killInfo.Arguments = "/PID " + pid + " /T /F";
+                killInfo.UseShellExecute = false;
+                killInfo.CreateNoWindow = true;
+                killInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                using (Process killer = Process.Start(killInfo))
+                {
+                    if (killer != null) killer.WaitForExit(2500);
+                }
+            }
+            catch { }
+        }
+
+        public static void KillProcessTree(Process process)
+        {
+            if (process == null) return;
+            Unregister(process);
+            TaskKillTree(process);
+            try { if (!process.HasExited) process.Kill(); } catch { }
+            try { process.Dispose(); } catch { }
+        }
+
+        public static void Shutdown()
+        {
+            List<Process> roots;
+            IntPtr handleToClose;
+            lock (Gate)
+            {
+                if (shuttingDown) return;
+                shuttingDown = true;
+                roots = Tracked.Values.ToList();
+                Tracked.Clear();
+                handleToClose = jobHandle;
+                jobHandle = IntPtr.Zero;
+            }
+
+            // First ask taskkill to tear down each known tree. Then close the Job
+            // Object as the fail-safe: KILL_ON_JOB_CLOSE catches any Chromium child
+            // that escaped between Process.Start() and our tracking code.
+            foreach (Process process in roots)
+                TaskKillTree(process);
+
+            if (handleToClose != IntPtr.Zero)
+            {
+                try { CloseHandle(handleToClose); } catch { }
+            }
+
+            foreach (Process process in roots)
+            {
+                try { if (!process.HasExited) process.Kill(); } catch { }
+                try { process.Dispose(); } catch { }
+            }
+        }
+    }
+
     public static class Scanner
     {
         public static readonly SemaphoreSlim ScanLock = new SemaphoreSlim(1, 1);
@@ -323,7 +515,15 @@ namespace SkinClubGiveawayDesktop
             RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
         private static readonly HttpClient Client = MakeClient();
-        private static readonly SemaphoreSlim RenderFallbackThrottle = new SemaphoreSlim(3, 3);
+        // Rendering is the expensive path: each Chromium instance creates several child
+        // processes. Allow a maximum of five hidden renders at once for a better balance
+        // between Deep Search speed and resource usage. HTTP discovery still runs
+        // concurrently; only the JS-render fallback is capped here.
+        private static readonly SemaphoreSlim RenderFallbackThrottle = new SemaphoreSlim(5, 5);
+        private static readonly object RenderCacheGate = new object();
+        private static readonly Dictionary<string, Tuple<DateTime, RenderedFields>> RenderCache =
+            new Dictionary<string, Tuple<DateTime, RenderedFields>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly TimeSpan RenderCacheLifetime = TimeSpan.FromMinutes(10);
 
         private static Dictionary<string, string> BuildDomainCreators()
         {
@@ -357,7 +557,7 @@ namespace SkinClubGiveawayDesktop
         private static HttpClient MakeClient()
         {
             ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
-            ServicePointManager.DefaultConnectionLimit = 40;
+            ServicePointManager.DefaultConnectionLimit = 20;
             HttpClientHandler h = new HttpClientHandler();
             h.AllowAutoRedirect = true;
             h.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
@@ -774,8 +974,53 @@ namespace SkinClubGiveawayDesktop
             return "";
         }
 
+        private static RenderedFields CloneRenderedFields(RenderedFields source)
+        {
+            RenderedFields copy = new RenderedFields();
+            if (source == null) return copy;
+            copy.Deadline = source.Deadline;
+            copy.PromoCode = source.PromoCode;
+            copy.MinimumDeposit = source.MinimumDeposit;
+            return copy;
+        }
+
+        private static bool TryGetRenderedCache(string url, out RenderedFields fields)
+        {
+            fields = null;
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            lock (RenderCacheGate)
+            {
+                Tuple<DateTime, RenderedFields> cached;
+                if (!RenderCache.TryGetValue(url, out cached)) return false;
+                if (DateTime.UtcNow - cached.Item1 > RenderCacheLifetime)
+                {
+                    RenderCache.Remove(url);
+                    return false;
+                }
+                fields = CloneRenderedFields(cached.Item2);
+                return true;
+            }
+        }
+
+        private static void StoreRenderedCache(string url, RenderedFields fields)
+        {
+            if (string.IsNullOrWhiteSpace(url) || fields == null) return;
+            lock (RenderCacheGate)
+            {
+                RenderCache[url] = Tuple.Create(DateTime.UtcNow, CloneRenderedFields(fields));
+            }
+        }
+
+        private static void KillProcessTree(Process process)
+        {
+            BrowserProcessManager.KillProcessTree(process);
+        }
+
         private static async Task<RenderedFields> FetchRenderedFieldsAsync(string url)
         {
+            RenderedFields cachedFields;
+            if (TryGetRenderedCache(url, out cachedFields)) return cachedFields;
+
             RenderedFields best = new RenderedFields();
             if (string.IsNullOrWhiteSpace(url)) return best;
             string browser = FindChromiumBrowser();
@@ -793,7 +1038,10 @@ namespace SkinClubGiveawayDesktop
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
                 psi.Arguments = "--headless=new --disable-gpu --disable-extensions --no-first-run --no-default-browser-check " +
-                                "--disable-sync --mute-audio --disable-background-networking --remote-allow-origins=* --remote-debugging-port=" + port +
+                                "--disable-sync --mute-audio --disable-background-networking --disable-component-update " +
+                                "--disable-features=MediaRouter,OptimizationHints,Translate,BackForwardCache " +
+                                "--renderer-process-limit=2 --blink-settings=imagesEnabled=false " +
+                                "--remote-allow-origins=* --remote-debugging-port=" + port +
                                 " --user-data-dir=\"" + profileDir + "\" \"" + url.Replace("\"", "") + "\"";
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
@@ -804,6 +1052,10 @@ namespace SkinClubGiveawayDesktop
                 process = new Process();
                 process.StartInfo = psi;
                 process.Start();
+                // Register immediately so app-owned Edge/Chrome processes belong to the
+                // kill-on-close Job Object and cannot survive after the app exits.
+                BrowserProcessManager.Register(process);
+                try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
                 // Drain pipes immediately so Chromium can never block on logging.
                 Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
                 Task<string> stderrTask = process.StandardError.ReadToEndAsync();
@@ -931,20 +1183,24 @@ namespace SkinClubGiveawayDesktop
                         if (deadline != "-") best.Deadline = deadline;
 
                         if (best.Deadline != "-" && best.PromoCode != "-" && best.MinimumDeposit != "-")
-                            return best;
+                        {
+                            StoreRenderedCache(url, best);
+                            return CloneRenderedFields(best);
+                        }
                     }
                     await Task.Delay(500);
                 }
-                return best;
+                StoreRenderedCache(url, best);
+                return CloneRenderedFields(best);
             }
-            catch { return best; }
+            catch
+            {
+                StoreRenderedCache(url, best);
+                return CloneRenderedFields(best);
+            }
             finally
             {
-                if (process != null)
-                {
-                    try { if (!process.HasExited) process.Kill(); } catch { }
-                    try { process.Dispose(); } catch { }
-                }
+                KillProcessTree(process);
                 if (!string.IsNullOrWhiteSpace(profileDir))
                 {
                     try { Directory.Delete(profileDir, true); } catch { }
@@ -1445,7 +1701,7 @@ namespace SkinClubGiveawayDesktop
                     }
                     cs.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
                 }
-                SemaphoreSlim throttle = new SemaphoreSlim(20, 20);
+                SemaphoreSlim throttle = new SemaphoreSlim(8, 8);
                 List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
                 foreach (Candidate c in cs) tasks.Add(ValidateAsync(c, throttle));
                 GiveawayItem[] updates = tasks.Count == 0 ? new GiveawayItem[0] : await Task.WhenAll(tasks);
@@ -1580,7 +1836,7 @@ namespace SkinClubGiveawayDesktop
             }
 
             object youtubeGate = new object();
-            SemaphoreSlim partnerSem = new SemaphoreSlim(8, 8);
+            SemaphoreSlim partnerSem = new SemaphoreSlim(4, 4);
             List<Task> partnerTasks = new List<Task>();
             foreach (string partnerName in PartnerSearchNames())
             {
@@ -1614,7 +1870,7 @@ namespace SkinClubGiveawayDesktop
             }
             if (partnerTasks.Count > 0) await Task.WhenAll(partnerTasks);
 
-            SemaphoreSlim sem = new SemaphoreSlim(10, 10);
+            SemaphoreSlim sem = new SemaphoreSlim(6, 6);
             List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
             foreach (string id in videoIds.Take(120))
             {
@@ -1642,7 +1898,7 @@ namespace SkinClubGiveawayDesktop
             List<Candidate> found = new List<Candidate>();
             HashSet<string> telegramPages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             object gate = new object();
-            SemaphoreSlim searchSem = new SemaphoreSlim(8, 8);
+            SemaphoreSlim searchSem = new SemaphoreSlim(4, 4);
             List<Task> searchTasks = new List<Task>();
 
             foreach (string partnerName in PartnerSearchNames())
@@ -1677,7 +1933,7 @@ namespace SkinClubGiveawayDesktop
             }
             if (searchTasks.Count > 0) await Task.WhenAll(searchTasks);
 
-            SemaphoreSlim sem = new SemaphoreSlim(8, 8);
+            SemaphoreSlim sem = new SemaphoreSlim(4, 4);
             List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
             foreach (string page in telegramPages.Take(60))
             {
@@ -1716,7 +1972,7 @@ namespace SkinClubGiveawayDesktop
                 queries.Add("\"" + slug + "\" SkinClub giveaway .club");
 
             object gate = new object();
-            SemaphoreSlim sem = new SemaphoreSlim(8, 8);
+            SemaphoreSlim sem = new SemaphoreSlim(4, 4);
             List<Task> tasks = new List<Task>();
             foreach (string query in queries)
             {
@@ -1776,7 +2032,7 @@ namespace SkinClubGiveawayDesktop
                 HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
 
                 List<GiveawayItem> useful = new List<GiveawayItem>();
-                SemaphoreSlim throttle = new SemaphoreSlim(28, 28);
+                SemaphoreSlim throttle = new SemaphoreSlim(12, 12);
                 const int chunkSize = 180;
                 for (int start = 0; start < candidates.Count; start += chunkSize)
                 {
@@ -2263,7 +2519,7 @@ namespace SkinClubGiveawayDesktop
 
         public MainForm()
         {
-            Text = "SkinClub GW Finder v1.2.2";
+            Text = "SkinClub GW Finder v1.2.3";
             Width = 1240;
             Height = 800;
             MinimumSize = new Size(1040, 680);
@@ -2283,6 +2539,14 @@ namespace SkinClubGiveawayDesktop
                 }
             };
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            // Closing the app must also close every hidden browser render that it owns.
+            // This prevents Edge/Chrome giveaway tabs from remaining in Task Manager.
+            FormClosing += delegate
+            {
+                try { if (autoTimer != null) autoTimer.Stop(); } catch { }
+                BrowserProcessManager.Shutdown();
+            };
 
             data = DataStore.Load();
             // History is persisted data. Do not reset ended giveaways back to
@@ -2362,7 +2626,7 @@ namespace SkinClubGiveawayDesktop
             brand.Controls.Add(logo);
 
             Label title = new Label();
-            title.Text = "SkinClub GW Finder v1.2.2";
+            title.Text = "SkinClub GW Finder v1.2.3";
             title.Left = 86;
             title.Top = 17;
             title.Width = 470;
@@ -3503,9 +3767,20 @@ namespace SkinClubGiveawayDesktop
         [STAThread]
         static void Main()
         {
+            // Two independent shutdown hooks plus the Job Object itself make browser
+            // cleanup reliable for normal close, managed shutdown, and most crashes.
+            Application.ApplicationExit += delegate { BrowserProcessManager.Shutdown(); };
+            AppDomain.CurrentDomain.ProcessExit += delegate { BrowserProcessManager.Shutdown(); };
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            try
+            {
+                Application.Run(new MainForm());
+            }
+            finally
+            {
+                BrowserProcessManager.Shutdown();
+            }
         }
     }
 }

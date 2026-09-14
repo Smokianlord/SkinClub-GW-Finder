@@ -1,0 +1,10 @@
+SkinClub GW Finder v1.2.2 - Browser Cleanup Fix
+
+- Keeps up to 5 concurrent rendered-page checks.
+- Tracks every Edge/Chrome/Brave process launched by the app.
+- Uses a Windows Job Object with KILL_ON_JOB_CLOSE.
+- Closing the app now terminates all app-owned browser child processes/tabs.
+- Adds normal-close, ApplicationExit, and ProcessExit cleanup hooks.
+- Does not terminate the user's normal browser windows.
+
+Note: browser processes orphaned by an older build are not owned by this build and may need to be closed once manually in Task Manager.

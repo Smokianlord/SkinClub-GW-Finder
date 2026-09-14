@@ -1,6 +1,1 @@
-SkinClub GW Finder v1.2.2
-
-Version shown in:
-- Window title bar
-- Main app header
-- EXE file/product version metadata (1.2.2.0)
+SkinClub GW Finder v1.2.3
