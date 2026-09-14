@@ -1,0 +1,6 @@
+Minimum deposit sorting fix
+
+- Minimum Deposit now sorts numerically instead of alphabetically.
+- $2 sorts before $5, $10 and $15 in ascending order.
+- Descending order reverses the numeric values correctly.
+- Unknown values (- / N/A) remain at the bottom.

@@ -9,12 +9,21 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+
+
+[assembly: AssemblyTitle("SkinClub GW Finder")]
+[assembly: AssemblyProduct("SkinClub GW Finder")]
+[assembly: AssemblyDescription("SkinClub creator giveaway monitor")]
+[assembly: AssemblyVersion("1.2.2.0")]
+[assembly: AssemblyFileVersion("1.2.2.0")]
+[assembly: AssemblyInformationalVersion("1.2.2")]
 
 namespace SkinClubGiveawayDesktop
 {
@@ -1299,10 +1308,20 @@ namespace SkinClubGiveawayDesktop
                     bool needsRenderedDeadline = activePage &&
                         (item.Deadline == "-" || Regex.IsMatch(html, @"time\s*to\s*completion", RegexOptions.IgnoreCase));
 
+                    // Deep Search generates some guessed date URLs as a safety net. A guessed URL
+                    // that merely returns HTTP 200 must not launch a full Chromium/CDP session.
+                    // That regression turned a ~1 minute scan into a multi-minute scan. Only use
+                    // the expensive rendered fallback when the static response actually looks like
+                    // a giveaway, or when the URL came from a real saved/social/manual discovery.
+                    bool generatedProbe = string.Equals(c.Source, "domain-probe", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(c.Source, "discovered-domain-probe", StringComparison.OrdinalIgnoreCase);
+                    bool staticGiveawaySignal = !string.Equals(item.Status, "unknown", StringComparison.OrdinalIgnoreCase) ||
+                        Regex.IsMatch(html, @"tickets?\s*(?:left|remaining)[^0-9]{0,40}[0-9]+\s*/\s*[0-9]+|time\s*to\s*completion", RegexOptions.IgnoreCase);
+                    bool allowRenderedMetadata = missingMetadata && (!generatedProbe || staticGiveawaySignal);
+
                     // Promo/minimum-deposit values may also be client-rendered on already-ended
-                    // giveaways. Joined items from older builds therefore still need the rendered
-                    // metadata path even when their giveaway status is ended.
-                    if (missingMetadata || needsRenderedDeadline)
+                    // giveaways. Saved/social links can still use the rendered metadata path.
+                    if (allowRenderedMetadata || needsRenderedDeadline)
                     {
                         RenderedFields rendered = await FetchRenderedFieldsAsync(item.Url);
                         if (rendered.PromoCode != "-") item.PromoCode = rendered.PromoCode;
@@ -1453,17 +1472,37 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
+        private static List<string> FastProbeSlugs()
+        {
+            // Brute-forcing every creator x every day for two months produced
+            // thousands of HTTP requests and could make Deep Search take several
+            // minutes. Social/YouTube discovery is the primary discovery path;
+            // these probes are only a safety net. Keep the recent week plus the
+            // 1st/2nd of the current and previous two months (the common campaign
+            // slugs, including older examples such as 010826 and 020826).
+            HashSet<string> slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string slug in RecentDateSlugs(8)) slugs.Add(slug);
+
+            DateTime today = DateTime.Now.Date;
+            for (int monthOffset = 0; monthOffset <= 2; monthOffset++)
+            {
+                DateTime month = new DateTime(today.AddMonths(-monthOffset).Year, today.AddMonths(-monthOffset).Month, 1);
+                for (int day = 1; day <= 2; day++)
+                {
+                    DateTime d = new DateTime(month.Year, month.Month, day);
+                    slugs.Add(string.Format("{0:00}{1:00}{2:00}", d.Day, d.Month, d.Year % 100));
+                }
+            }
+            return slugs.ToList();
+        }
+
         private static List<Candidate> GeneratedCandidates()
         {
             List<Candidate> list = new List<Candidate>();
+            List<string> slugs = FastProbeSlugs();
             foreach (KeyValuePair<string, string> kv in CreatorDomains)
             {
-                // Creator giveaway slugs are DDMMYY. Probe a little over two
-                // months of dates so Deep Search can rediscover giveaways that
-                // have already ended and still belong in the one-month History
-                // retention window. The old 35-day window missed older campaigns
-                // such as joaco.club/010826/ when scanning in mid-September.
-                foreach (string slug in RecentDateSlugs(62))
+                foreach (string slug in slugs)
                     list.Add(new Candidate(kv.Key, BuildProbeUrl(kv.Value, slug), "domain-probe"));
             }
             return list;
@@ -1487,7 +1526,7 @@ namespace SkinClubGiveawayDesktop
             foreach (string host in hosts)
             {
                 string creator = InferCreator("https://" + host + "/", null);
-                foreach (string slug in RecentDateSlugs(62))
+                foreach (string slug in FastProbeSlugs())
                     candidates.Add(new Candidate(creator, BuildProbeUrl(host, slug), "discovered-domain-probe"));
             }
         }
@@ -1540,19 +1579,40 @@ namespace SkinClubGiveawayDesktop
                 }
             }
 
-            foreach (string partner in PartnerSearchNames())
+            object youtubeGate = new object();
+            SemaphoreSlim partnerSem = new SemaphoreSlim(8, 8);
+            List<Task> partnerTasks = new List<Task>();
+            foreach (string partnerName in PartnerSearchNames())
             {
-                if (videoIds.Count >= 120) break;
-                string q = partner + " skinclub";
-                string raw = await GetStringSafeAsync("https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q));
-                found.AddRange(ExtractDirectUrls(raw, "youtube-partner:" + partner));
-                int added = 0;
-                foreach (Match m in VideoIdRegex.Matches(raw))
+                string partner = partnerName;
+                partnerTasks.Add(Task.Run(async delegate
                 {
-                    if (videoIds.Count >= 120 || added >= 2) break;
-                    if (videoIds.Add(m.Groups[1].Value)) added++;
-                }
+                    await partnerSem.WaitAsync();
+                    try
+                    {
+                        string q = partner + " skinclub";
+                        string raw = await GetStringSafeAsync("https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q));
+                        List<Candidate> local = ExtractDirectUrls(raw, "youtube-partner:" + partner);
+                        List<string> localIds = new List<string>();
+                        foreach (Match m in VideoIdRegex.Matches(raw))
+                        {
+                            if (localIds.Count >= 2) break;
+                            localIds.Add(m.Groups[1].Value);
+                        }
+                        lock (youtubeGate)
+                        {
+                            found.AddRange(local);
+                            foreach (string id in localIds)
+                            {
+                                if (videoIds.Count >= 120) break;
+                                videoIds.Add(id);
+                            }
+                        }
+                    }
+                    finally { partnerSem.Release(); }
+                }));
             }
+            if (partnerTasks.Count > 0) await Task.WhenAll(partnerTasks);
 
             SemaphoreSlim sem = new SemaphoreSlim(10, 10);
             List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
@@ -1581,32 +1641,42 @@ namespace SkinClubGiveawayDesktop
         {
             List<Candidate> found = new List<Candidate>();
             HashSet<string> telegramPages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            object gate = new object();
+            SemaphoreSlim searchSem = new SemaphoreSlim(8, 8);
+            List<Task> searchTasks = new List<Task>();
 
-            foreach (string partner in PartnerSearchNames())
+            foreach (string partnerName in PartnerSearchNames())
             {
-                // One public-web query per partner intentionally spans YouTube, X,
-                // Telegram, Discord, Instagram, TikTok and Twitch. Search-result
-                // snippets often expose the dated .club URL directly. Telegram
-                // result pages are also fetched below because they are publicly
-                // readable without an account.
-                string q = "\"" + partner + "\" SkinClub giveaway (YouTube OR X OR Twitter OR Telegram OR Discord OR Instagram OR TikTok OR Twitch OR Kick OR Facebook)";
-                string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=20";
-                string raw = await GetStringSafeAsync(bing);
-                found.AddRange(ExtractDirectUrls(raw, "partner-social-search:" + partner));
-
-                foreach (string socialUrl in ExtractSocialUrls(raw))
+                string partner = partnerName;
+                searchTasks.Add(Task.Run(async delegate
                 {
-                    if (telegramPages.Count >= 60) break;
-                    Uri u;
-                    if (!Uri.TryCreate(socialUrl, UriKind.Absolute, out u)) continue;
-                    if (!u.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (u.AbsolutePath.StartsWith("/+", StringComparison.Ordinal)) continue;
-                    telegramPages.Add(socialUrl);
-                }
+                    await searchSem.WaitAsync();
+                    try
+                    {
+                        string q = "\"" + partner + "\" SkinClub giveaway (YouTube OR X OR Twitter OR Telegram OR Discord OR Instagram OR TikTok OR Twitch OR Kick OR Facebook)";
+                        string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=20";
+                        string raw = await GetStringSafeAsync(bing);
+                        List<Candidate> local = ExtractDirectUrls(raw, "partner-social-search:" + partner);
+                        List<string> socials = ExtractSocialUrls(raw);
+                        lock (gate)
+                        {
+                            found.AddRange(local);
+                            foreach (string socialUrl in socials)
+                            {
+                                if (telegramPages.Count >= 60) break;
+                                Uri u;
+                                if (!Uri.TryCreate(socialUrl, UriKind.Absolute, out u)) continue;
+                                if (!u.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase)) continue;
+                                if (u.AbsolutePath.StartsWith("/+", StringComparison.Ordinal)) continue;
+                                telegramPages.Add(socialUrl);
+                            }
+                        }
+                    }
+                    finally { searchSem.Release(); }
+                }));
             }
+            if (searchTasks.Count > 0) await Task.WhenAll(searchTasks);
 
-            // Telegram exposes public posts as ordinary web pages, so inspect the
-            // partner-search results themselves for dated creator giveaway URLs.
             SemaphoreSlim sem = new SemaphoreSlim(8, 8);
             List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
             foreach (string page in telegramPages.Take(60))
@@ -1642,17 +1712,29 @@ namespace SkinClubGiveawayDesktop
             queries.Add("site:x.com/skinclubpartner SkinClub giveaway .club");
             queries.Add("site:t.me/skinclubcs2 giveaway .club");
 
-            // Search every recent DDMMYY slug instead of assuming that only
-            // 01-12 can appear at the start of the URL.
-            foreach (string slug in RecentDateSlugs(35))
+            foreach (string slug in FastProbeSlugs())
                 queries.Add("\"" + slug + "\" SkinClub giveaway .club");
 
-            foreach (string q in queries)
+            object gate = new object();
+            SemaphoreSlim sem = new SemaphoreSlim(8, 8);
+            List<Task> tasks = new List<Task>();
+            foreach (string query in queries)
             {
-                string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=50";
-                string raw = await GetStringSafeAsync(bing);
-                found.AddRange(ExtractDirectUrls(raw, "web-search"));
+                string q = query;
+                tasks.Add(Task.Run(async delegate
+                {
+                    await sem.WaitAsync();
+                    try
+                    {
+                        string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=50";
+                        string raw = await GetStringSafeAsync(bing);
+                        List<Candidate> local = ExtractDirectUrls(raw, "web-search");
+                        lock (gate) found.AddRange(local);
+                    }
+                    finally { sem.Release(); }
+                }));
             }
+            if (tasks.Count > 0) await Task.WhenAll(tasks);
             return found;
         }
 
@@ -1946,6 +2028,184 @@ namespace SkinClubGiveawayDesktop
         }
     }
 
+    public class CopyToastControl : Control
+    {
+        private readonly System.Windows.Forms.Timer animationTimer;
+        private readonly string toastText;
+        private Point settledLocation;
+        private int elapsedMs;
+        private double animationAlpha;
+
+        private static readonly Color ToastTop = Color.FromArgb(19, 78, 74);
+        private static readonly Color ToastBottom = Color.FromArgb(10, 45, 52);
+        private static readonly Color ToastBorder = Color.FromArgb(45, 212, 191);
+        private static readonly Color ToastText = Color.FromArgb(240, 253, 250);
+
+        public event EventHandler Finished;
+
+        public CopyToastControl(string text, Point anchor, Rectangle availableArea)
+        {
+            toastText = string.IsNullOrWhiteSpace(text) ? "COPIED" : text.ToUpperInvariant();
+
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            TabStop = false;
+            Enabled = false;
+            Font = new Font("Segoe UI Semibold", 8.5F);
+
+            Size measured = TextRenderer.MeasureText(toastText, Font, new Size(400, 40), TextFormatFlags.SingleLine);
+            Width = Math.Max(104, measured.Width + 50);
+            Height = 38;
+
+            int x = anchor.X - Width / 2;
+            int y = anchor.Y - Height - 12;
+            if (y < availableArea.Top + 4) y = anchor.Y + 16;
+            if (x < availableArea.Left + 4) x = availableArea.Left + 4;
+            if (x + Width > availableArea.Right - 4) x = availableArea.Right - Width - 4;
+            if (y + Height > availableArea.Bottom - 4) y = availableArea.Bottom - Height - 4;
+
+            settledLocation = new Point(x, y);
+            Location = new Point(x, y + 8);
+            Visible = false;
+
+            animationTimer = new System.Windows.Forms.Timer();
+            animationTimer.Interval = 16;
+            animationTimer.Tick += AnimationTick;
+        }
+
+        public void Start()
+        {
+            elapsedMs = 0;
+            animationAlpha = 0.0;
+            Visible = true;
+            BringToFront();
+            animationTimer.Start();
+        }
+
+        private static double Clamp01(double value)
+        {
+            if (value < 0.0) return 0.0;
+            if (value > 1.0) return 1.0;
+            return value;
+        }
+
+        private static double EaseOutCubic(double t)
+        {
+            t = Clamp01(t);
+            double inv = 1.0 - t;
+            return 1.0 - inv * inv * inv;
+        }
+
+        private void AnimationTick(object sender, EventArgs e)
+        {
+            elapsedMs += animationTimer.Interval;
+
+            if (elapsedMs <= 170)
+            {
+                double progress = EaseOutCubic(elapsedMs / 170.0);
+                animationAlpha = Math.Min(0.96, progress * 0.96);
+                Location = new Point(settledLocation.X, settledLocation.Y + (int)Math.Round(8.0 * (1.0 - progress)));
+                Invalidate();
+                return;
+            }
+
+            if (elapsedMs <= 900)
+            {
+                animationAlpha = 0.96;
+                Location = settledLocation;
+                Invalidate();
+                return;
+            }
+
+            double fade = Clamp01((elapsedMs - 900) / 320.0);
+            animationAlpha = Math.Max(0.0, 0.96 * (1.0 - fade));
+            Location = new Point(settledLocation.X, settledLocation.Y - (int)Math.Round(7.0 * fade));
+            Invalidate();
+
+            if (elapsedMs >= 1220)
+            {
+                animationTimer.Stop();
+                Visible = false;
+                EventHandler handler = Finished;
+                if (handler != null) handler(this, EventArgs.Empty);
+                if (Parent != null) Parent.Controls.Remove(this);
+                Dispose();
+            }
+        }
+
+        private static Color WithAlpha(Color color, double alpha)
+        {
+            int a = (int)Math.Round(255.0 * Clamp01(alpha));
+            return Color.FromArgb(a, color.R, color.G, color.B);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (animationAlpha <= 0.0) return;
+
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle pill = new Rectangle(1, 1, Width - 3, Height - 3);
+            Color top = WithAlpha(ToastTop, animationAlpha);
+            Color bottom = WithAlpha(ToastBottom, animationAlpha);
+            Color borderColor = WithAlpha(ToastBorder, animationAlpha);
+            Color textColor = WithAlpha(ToastText, animationAlpha);
+
+            using (GraphicsPath path = RoundedRect(pill, 10))
+            using (LinearGradientBrush fill = new LinearGradientBrush(pill, top, bottom, LinearGradientMode.Vertical))
+            using (Pen border = new Pen(borderColor, 1.2F))
+            {
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(border, path);
+            }
+
+            Rectangle badge = new Rectangle(10, 9, 20, 20);
+            using (SolidBrush badgeFill = new SolidBrush(WithAlpha(Color.FromArgb(45, 212, 191), animationAlpha)))
+                e.Graphics.FillEllipse(badgeFill, badge);
+            using (Pen check = new Pen(WithAlpha(Color.White, animationAlpha), 2.0F))
+            {
+                check.StartCap = LineCap.Round;
+                check.EndCap = LineCap.Round;
+                e.Graphics.DrawLines(check, new Point[]
+                {
+                    new Point(15, 19),
+                    new Point(19, 23),
+                    new Point(26, 15)
+                });
+            }
+
+            Rectangle textRect = new Rectangle(37, 1, Width - 44, Height - 3);
+            using (SolidBrush textBrush = new SolidBrush(textColor))
+            using (StringFormat format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Near;
+                format.LineAlignment = StringAlignment.Center;
+                format.FormatFlags = StringFormatFlags.NoWrap;
+                e.Graphics.DrawString(toastText, Font, textBrush, textRect, format);
+            }
+        }
+
+        private static GraphicsPath RoundedRect(Rectangle r, int radius)
+        {
+            GraphicsPath path = new GraphicsPath();
+            int d = Math.Max(2, radius * 2);
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && animationTimer != null)
+                animationTimer.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
     public class MainForm : Form
     {
         private AppData data;
@@ -1974,6 +2234,7 @@ namespace SkinClubGiveawayDesktop
         private bool showingJoined = false;
         private bool scanning = false;
         private System.Windows.Forms.Timer autoTimer;
+        private CopyToastControl copyToast;
         private string sortColumn = "Creator";
         private bool sortAscending = true;
 
@@ -2002,7 +2263,7 @@ namespace SkinClubGiveawayDesktop
 
         public MainForm()
         {
-            Text = "SkinClub GW Finder";
+            Text = "SkinClub GW Finder v1.2.2";
             Width = 1240;
             Height = 800;
             MinimumSize = new Size(1040, 680);
@@ -2101,7 +2362,7 @@ namespace SkinClubGiveawayDesktop
             brand.Controls.Add(logo);
 
             Label title = new Label();
-            title.Text = "SkinClub GW Finder";
+            title.Text = "SkinClub GW Finder v1.2.2";
             title.Left = 86;
             title.Top = 17;
             title.Width = 470;
@@ -2674,6 +2935,11 @@ namespace SkinClubGiveawayDesktop
 
             if (columnName == "JoinedAction")
             {
+                // Deep Search/Refresh runs against a snapshot so browsing and copying
+                // remain fully usable. Avoid changing Joined state mid-scan because a
+                // completed snapshot would otherwise overwrite that edit.
+                if (scanning) return;
+
                 if (showingJoined)
                 {
                     item.Joined = false;
@@ -2710,13 +2976,13 @@ namespace SkinClubGiveawayDesktop
                 {
                     if (columnName == "Link")
                     {
-                        CopyToClipboard(url, "Link copied to clipboard");
+                        CopyToClipboard(url, "Link copied to clipboard", grid.PointToScreen(clickPoint), "LINK COPIED");
                     }
                     else
                     {
                         string promo = item.PromoCode ?? "";
                         if (!string.IsNullOrWhiteSpace(promo) && promo != "-")
-                            CopyToClipboard(promo, "Promocode copied to clipboard");
+                            CopyToClipboard(promo, "Promocode copied to clipboard", grid.PointToScreen(clickPoint), "CODE COPIED");
                         else
                         {
                             scanStatus.Text = "No promocode available";
@@ -2733,10 +2999,33 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
-        private void CopyToClipboard(string value, string message)
+        private void CopyToClipboard(string value, string message, Point screenAnchor, string toastMessage)
         {
             if (string.IsNullOrWhiteSpace(value)) return;
-            Clipboard.SetText(value);
+
+            try
+            {
+                Clipboard.SetText(value);
+            }
+            catch
+            {
+                // The Windows clipboard can occasionally be locked by another app.
+                // Never let a clipboard failure interfere with an active scan or the UI.
+                if (!scanning)
+                {
+                    scanStatus.Text = "Clipboard is busy - try again";
+                    scanStatus.ForeColor = Warning;
+                }
+                return;
+            }
+
+            ShowCopyToast(screenAnchor, toastMessage);
+
+            // While a Refresh/Deep Search is running, keep the scan progress message
+            // visible. The animated confirmation above still provides immediate copy
+            // feedback without replacing Deep Search progress.
+            if (scanning) return;
+
             scanStatus.Text = message;
             scanStatus.ForeColor = Success;
             Task.Delay(1400).ContinueWith(delegate
@@ -2754,6 +3043,39 @@ namespace SkinClubGiveawayDesktop
                 }
                 catch { }
             });
+        }
+
+        private void ShowCopyToast(Point screenAnchor, string text)
+        {
+            try
+            {
+                if (copyToast != null && !copyToast.IsDisposed)
+                {
+                    if (copyToast.Parent != null) copyToast.Parent.Controls.Remove(copyToast);
+                    copyToast.Dispose();
+                    copyToast = null;
+                }
+            }
+            catch { }
+
+            try
+            {
+                Point clientAnchor = PointToClient(screenAnchor);
+                CopyToastControl toast = new CopyToastControl(text, clientAnchor, ClientRectangle);
+                copyToast = toast;
+                toast.Finished += delegate
+                {
+                    try
+                    {
+                        if (object.ReferenceEquals(copyToast, toast)) copyToast = null;
+                    }
+                    catch { }
+                };
+                Controls.Add(toast);
+                toast.BringToFront();
+                toast.Start();
+            }
+            catch { }
         }
 
         private List<GiveawayItem> CurrentItems()
@@ -2839,7 +3161,16 @@ namespace SkinClubGiveawayDesktop
             }
             else if (string.Equals(sortColumn, "MinimumDeposit", StringComparison.OrdinalIgnoreCase))
             {
-                cmp = string.Compare(a.MinimumDeposit ?? "", b.MinimumDeposit ?? "", StringComparison.OrdinalIgnoreCase);
+                decimal av, bv;
+                bool ah = TryMinimumDepositValue(a.MinimumDeposit, out av);
+                bool bh = TryMinimumDepositValue(b.MinimumDeposit, out bv);
+
+                // Sort deposit amounts numerically instead of alphabetically.
+                // Example: $2, $5, $10, $15 (not $10, $15, $2, $5).
+                // Missing/unknown values stay at the bottom in either direction.
+                if (ah != bh) return ah ? -1 : 1;
+                if (ah && bh) cmp = av.CompareTo(bv);
+                else cmp = 0;
             }
             else if (string.Equals(sortColumn, "Link", StringComparison.OrdinalIgnoreCase))
             {
@@ -2864,6 +3195,29 @@ namespace SkinClubGiveawayDesktop
             string a = m.Groups[1].Value.Replace(",", "").Replace(".", "");
             string b = m.Groups[2].Value.Replace(",", "").Replace(".", "");
             return long.TryParse(a, out remaining) && long.TryParse(b, out total);
+        }
+
+        private bool TryMinimumDepositValue(string raw, out decimal value)
+        {
+            value = 0m;
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+
+            string text = raw.Trim();
+            if (text == "-" || string.Equals(text, "N/A", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Minimum deposits are displayed with currency markers (for example
+            // "$5", "10 USD", "€2.50").  Extract the numeric amount so the
+            // grid sorts by value rather than by the formatted display string.
+            Match m = Regex.Match(text, @"[0-9]+(?:[.,][0-9]+)?");
+            if (!m.Success) return false;
+
+            string number = m.Value.Replace(',', '.');
+            return decimal.TryParse(
+                number,
+                System.Globalization.NumberStyles.AllowDecimalPoint,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
         }
 
         private bool TryDeadlineDate(GiveawayItem item, out DateTime value)
@@ -3025,14 +3379,33 @@ namespace SkinClubGiveawayDesktop
             return "NEVER";
         }
 
+        private AppData CloneDataForScan(AppData source)
+        {
+            // Scanner methods merge results into the AppData instance they receive.
+            // Give the worker its own copy so the UI can safely switch tabs, sort,
+            // search and copy values while a long scan is running.
+            JavaScriptSerializer js = new JavaScriptSerializer();
+            js.MaxJsonLength = int.MaxValue;
+            string json = js.Serialize(source ?? new AppData());
+            AppData clone = js.Deserialize<AppData>(json);
+            if (clone == null) clone = new AppData();
+            if (clone.Items == null) clone.Items = new List<GiveawayItem>();
+            return clone;
+        }
+
         private void SetScanning(bool value, string message)
         {
             scanning = value;
             refreshButton.Enabled = !value;
             deepButton.Enabled = !value;
             addButton.Enabled = !value;
-            historyButton.Enabled = !value;
-            joinedButton.Enabled = !value;
+
+            // View navigation must stay usable during long scans. Deep Search and
+            // Refresh now work on a cloned data snapshot, so switching between
+            // Active / History / Joined cannot race with the scanner.
+            historyButton.Enabled = true;
+            joinedButton.Enabled = true;
+
             scanStatus.Text = value ? message : "Ready";
             scanStatus.ForeColor = value ? Warning : Muted;
 
@@ -3052,11 +3425,12 @@ namespace SkinClubGiveawayDesktop
                 // Some giveaway pages require a headless Chromium/CDP fallback.
                 // Run the entire scan away from the WinForms UI thread so Chromium
                 // startup/parsing can never make Windows show the spinning busy cursor.
-                AppData currentData = data;
-                data = await Task.Run(async delegate
+                AppData scanData = CloneDataForScan(data);
+                AppData refreshed = await Task.Run(async delegate
                 {
-                    return await Scanner.RefreshSavedAsync(currentData);
+                    return await Scanner.RefreshSavedAsync(scanData);
                 });
+                data = refreshed;
                 Render();
             }
             catch (Exception ex)
@@ -3072,11 +3446,12 @@ namespace SkinClubGiveawayDesktop
             SetScanning(true, "Deep searching partners, YouTube, Telegram and social sources...");
             try
             {
-                AppData currentData = data;
-                data = await Task.Run(async delegate
+                AppData scanData = CloneDataForScan(data);
+                AppData scanned = await Task.Run(async delegate
                 {
-                    return await Scanner.DeepScanAsync(currentData);
+                    return await Scanner.DeepScanAsync(scanData);
                 });
+                data = scanned;
                 Render();
                 int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
                 scanStatus.Text = "Deep Search complete  •  " + ac + " active giveaway" + (ac == 1 ? "" : "s");

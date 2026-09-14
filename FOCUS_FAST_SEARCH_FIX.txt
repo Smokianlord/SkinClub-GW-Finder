@@ -1,0 +1,10 @@
+Focus + Deep Search performance fix
+
+- Copy confirmation is now drawn inside the main window instead of opening a temporary Form.
+  This prevents Windows from moving focus away from SkinClub GW Finder when LINK COPIED / CODE COPIED appears.
+- Copy confirmation keeps the same short animated slide/fade behavior.
+- Deep Search no longer brute-forces every day for every creator over two months.
+- Direct-domain probing now uses recent dates plus the common 01/02 monthly campaign dates.
+- Partner social, YouTube partner, and web search requests are run with bounded concurrency instead of serially.
+- Guessed URLs no longer launch Chromium/CDP just because they return HTTP 200; the expensive render fallback runs only when the page has real giveaway signals or came from a real discovered/saved link.
+- Existing ticket, deadline, promocode, minimum-deposit, Joined, History, and UI behavior is preserved.

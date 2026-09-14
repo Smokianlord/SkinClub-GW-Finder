@@ -1,3 +1,9 @@
+# v1.2.2
+
+- Added the app version to the window title and main header.
+- Added v1.2.2 EXE version metadata.
+- Includes all fixes from the current sorting/deep-search build.
+
 # Changelog
 
 All notable changes to SkinClub GW Finder will be documented in this file.
@@ -23,3 +29,8 @@ All notable changes to SkinClub GW Finder will be documented in this file.
 - Joined giveaways incorrectly remaining visible in Active/History.
 - Joined removal routing.
 - Date capitalization consistency.
+
+## Focus and Deep Search performance fix
+- Prevented animated copy confirmation from taking window focus.
+- Reduced Deep Search brute-force probing and parallelized discovery requests.
+- Prevented unnecessary Chromium/CDP rendering for guessed non-giveaway URLs.

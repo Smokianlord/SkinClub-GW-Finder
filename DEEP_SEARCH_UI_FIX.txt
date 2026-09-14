@@ -1,0 +1,7 @@
+Deep Search UI fix
+
+- Active / History / Joined navigation stays enabled while Refresh or Deep Search runs.
+- Refresh and Deep Search now operate on a cloned AppData snapshot so tab switching, sorting, searching and copying stay responsive without racing the scanner.
+- Copying a link or promocode during a scan no longer replaces the scan progress message.
+- Clipboard failures are contained and no longer interfere with an active scan.
+- Joined/Remove state changes are intentionally ignored while a scan is running so the completed scan cannot overwrite a mid-scan edit.

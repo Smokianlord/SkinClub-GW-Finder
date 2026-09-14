@@ -1,0 +1,7 @@
+Copy confirmation animation
+
+- Clicking the inline LINK copy icon shows a compact "LINK COPIED" pill at the click location.
+- Clicking the PROMOCODE copy icon shows a compact "CODE COPIED" pill at the click location.
+- The confirmation fades/slides in, remains readable briefly, then floats upward and fades out.
+- It never steals focus and does not replace Deep Search / Refresh progress text.
+- Repeated copy clicks replace the previous confirmation cleanly.
