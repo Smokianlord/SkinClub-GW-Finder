@@ -1097,7 +1097,14 @@ namespace SkinClubGiveawayDesktop
             {
                 List<Candidate> cs = new List<Candidate>();
                 foreach (GiveawayItem i in data.Items)
+                {
+                    // Ended giveaways are already saved in History. Re-checking
+                    // them on every app launch can reclassify or delay History
+                    // unnecessarily. Keep them persisted until normal retention
+                    // cleanup removes them. Active/unknown items still refresh.
+                    if (string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase)) continue;
                     cs.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
+                }
                 SemaphoreSlim throttle = new SemaphoreSlim(20, 20);
                 List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
                 foreach (Candidate c in cs) tasks.Add(ValidateAsync(c, throttle));
@@ -1696,7 +1703,9 @@ namespace SkinClubGiveawayDesktop
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             data = DataStore.Load();
-            RepairLegacyStatuses();
+            // History is persisted data. Do not reset ended giveaways back to
+            // unknown on startup; that made the History tab rebuild itself on
+            // every launch instead of loading the saved classification.
             BuildUi();
             Render();
 

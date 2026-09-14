@@ -1,0 +1,6 @@
+History persistence fix
+
+- Ended giveaways are no longer reset to Unknown when the app starts.
+- Saved History entries are no longer revalidated on every launch.
+- Active and unknown giveaways still refresh automatically.
+- History entries remain in data.json and follow the existing one-month retention cleanup.
