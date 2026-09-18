@@ -1,0 +1,7 @@
+Cross-metadata bug fix
+
+- Chromium now chooses its own DevTools debugging port for each render.
+- The app reads the assigned port from each unique browser profile's DevToolsActivePort file.
+- CDP now attaches only to a page target whose host exactly matches the giveaway being validated.
+- Prevents metadata from one concurrently rendered giveaway from being assigned to another row.
+- Keeps the existing maximum of 5 concurrent rendered-page checks.

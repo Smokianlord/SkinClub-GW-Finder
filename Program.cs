@@ -24,7 +24,7 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("SkinClub creator giveaway monitor")]
 [assembly: AssemblyVersion("1.2.3.0")]
 [assembly: AssemblyFileVersion("1.2.3.0")]
-[assembly: AssemblyInformationalVersion("1.2.2")]
+[assembly: AssemblyInformationalVersion("1.2.3")]
 
 namespace SkinClubGiveawayDesktop
 {
@@ -124,6 +124,24 @@ namespace SkinClubGiveawayDesktop
                         upper == "PRIZE" || upper == "POOL" || upper == "DISCOUNT" ||
                         upper == "PROMO" || upper == "PROMOCODE" || upper == "CODE")
                         item.PromoCode = "-";
+
+                    // Repair metadata contaminated by the old concurrent Chromium/CDP
+                    // race. Participation codes normally carry the same DDMMYY slug as
+                    // the giveaway URL. If the saved code points at a different dated
+                    // giveaway (for example SAMZ /010926 with ...-010826), discard the
+                    // promo/deposit so the normal refresh can repopulate them correctly.
+                    if (!string.IsNullOrWhiteSpace(item.PromoCode) && item.PromoCode != "-" &&
+                        !string.IsNullOrWhiteSpace(item.Url))
+                    {
+                        Match promoDate = Regex.Match(item.PromoCode, @"-(\d{6})$", RegexOptions.IgnoreCase);
+                        Match urlDate = Regex.Match(item.Url, @"/(\d{6})(?:/|$|\?)", RegexOptions.IgnoreCase);
+                        if (promoDate.Success && urlDate.Success &&
+                            !string.Equals(promoDate.Groups[1].Value, urlDate.Groups[1].Value, StringComparison.OrdinalIgnoreCase))
+                        {
+                            item.PromoCode = "-";
+                            item.MinimumDeposit = "-";
+                        }
+                    }
                 }
                 PruneOldHistory(data);
                 return data;
@@ -1031,7 +1049,11 @@ namespace SkinClubGiveawayDesktop
             Process process = null;
             try
             {
-                int port = GetFreeTcpPort();
+                // Let Chromium choose its own DevTools port. The previous build first asked
+                // Windows for a free port and then released it before Chromium started. With
+                // up to five renders running concurrently, two renders could occasionally be
+                // handed the same port and one validator could connect to another giveaway's
+                // browser session. That is how metadata from ErycTriceps could appear on SAMZ.
                 profileDir = Path.Combine(Path.GetTempPath(), "SkinClubGWFinder_" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(profileDir);
 
@@ -1041,7 +1063,7 @@ namespace SkinClubGiveawayDesktop
                                 "--disable-sync --mute-audio --disable-background-networking --disable-component-update " +
                                 "--disable-features=MediaRouter,OptimizationHints,Translate,BackForwardCache " +
                                 "--renderer-process-limit=2 --blink-settings=imagesEnabled=false " +
-                                "--remote-allow-origins=* --remote-debugging-port=" + port +
+                                "--remote-allow-origins=* --remote-debugging-port=0" +
                                 " --user-data-dir=\"" + profileDir + "\" \"" + url.Replace("\"", "") + "\"";
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
@@ -1065,8 +1087,32 @@ namespace SkinClubGiveawayDesktop
                 HttpClient localClient = new HttpClient(localHandler);
                 localClient.Timeout = TimeSpan.FromSeconds(2);
                 string websocketUrl = "";
+                int port = 0;
+                string requestedHost = "";
+                try { requestedHost = new Uri(url).Host; } catch { }
                 DateTime discoveryDeadline = DateTime.UtcNow.AddSeconds(8);
-                while (DateTime.UtcNow < discoveryDeadline && string.IsNullOrWhiteSpace(websocketUrl))
+
+                // With --remote-debugging-port=0 Chromium writes the actual selected port
+                // to DevToolsActivePort in this render's unique profile directory. This is
+                // race-free even when five browser renders start at the same time.
+                while (DateTime.UtcNow < discoveryDeadline && port <= 0)
+                {
+                    try
+                    {
+                        string activePortFile = Path.Combine(profileDir, "DevToolsActivePort");
+                        if (File.Exists(activePortFile))
+                        {
+                            string[] lines = File.ReadAllLines(activePortFile);
+                            int parsedPort;
+                            if (lines.Length > 0 && int.TryParse(lines[0].Trim(), out parsedPort) && parsedPort > 0)
+                                port = parsedPort;
+                        }
+                    }
+                    catch { }
+                    if (port <= 0) await Task.Delay(100);
+                }
+
+                while (DateTime.UtcNow < discoveryDeadline && port > 0 && string.IsNullOrWhiteSpace(websocketUrl))
                 {
                     try
                     {
@@ -1080,16 +1126,24 @@ namespace SkinClubGiveawayDesktop
                             string type = tab.ContainsKey("type") ? JsonStringValue(tab["type"]) : "";
                             string tabUrl = tab.ContainsKey("url") ? JsonStringValue(tab["url"]) : "";
                             string ws = tab.ContainsKey("webSocketDebuggerUrl") ? JsonStringValue(tab["webSocketDebuggerUrl"]) : "";
-                            if (type == "page" && !string.IsNullOrWhiteSpace(ws))
+                            if (!string.Equals(type, "page", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(ws))
+                                continue;
+
+                            // Never fall back to the first page target. Only attach to the
+                            // target whose host matches the giveaway currently being validated.
+                            // This is a second guard against cross-page metadata contamination.
+                            Uri tabUri;
+                            if (!string.IsNullOrWhiteSpace(requestedHost) &&
+                                Uri.TryCreate(tabUrl, UriKind.Absolute, out tabUri) &&
+                                string.Equals(tabUri.Host, requestedHost, StringComparison.OrdinalIgnoreCase))
                             {
                                 websocketUrl = ws;
-                                if (!string.IsNullOrWhiteSpace(tabUrl) && tabUrl.IndexOf(new Uri(url).Host, StringComparison.OrdinalIgnoreCase) >= 0)
-                                    break;
+                                break;
                             }
                         }
                     }
                     catch { }
-                    if (string.IsNullOrWhiteSpace(websocketUrl)) await Task.Delay(250);
+                    if (string.IsNullOrWhiteSpace(websocketUrl)) await Task.Delay(150);
                 }
 
                 if (string.IsNullOrWhiteSpace(websocketUrl)) return best;
