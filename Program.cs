@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -115,6 +115,7 @@ namespace SkinClubGiveawayDesktop
                 AppData data = js.Deserialize<AppData>(json);
                 if (data == null) data = DefaultData();
                 if (data.Items == null) data.Items = new List<GiveawayItem>();
+                data.Items.RemoveAll(delegate(GiveawayItem item) { return item == null || string.IsNullOrWhiteSpace(item.Url); });
                 foreach (GiveawayItem item in data.Items)
                 {
                     if (item == null) continue;
@@ -143,11 +144,15 @@ namespace SkinClubGiveawayDesktop
                         }
                     }
                 }
+                int previousCount = data.Items.Count;
                 PruneOldHistory(data);
+                if (data.Items.Count != previousCount) Save(data);
                 return data;
             }
             catch
             {
+                // Preserve unreadable data for recovery instead of silently destroying it.
+                File.Copy(DataFile, DataFile + ".corrupt-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"), false);
                 AppData fallback = DefaultData();
                 Save(fallback);
                 return fallback;
@@ -165,8 +170,8 @@ namespace SkinClubGiveawayDesktop
                 string json = js.Serialize(data);
                 string temp = DataFile + ".tmp";
                 File.WriteAllText(temp, json, Encoding.UTF8);
-                if (File.Exists(DataFile)) File.Delete(DataFile);
-                File.Move(temp, DataFile);
+                if (File.Exists(DataFile)) File.Replace(temp, DataFile, DataFile + ".bak");
+                else File.Move(temp, DataFile);
             }
         }
 
@@ -174,38 +179,30 @@ namespace SkinClubGiveawayDesktop
         {
             if (data == null || data.Items == null) return;
 
-            // Keep History for one full calendar month from the moment an item
-            // actually enters History. Do NOT infer retention from the DDMMYY URL:
-            // that was destructive for existing data and could wipe the whole
-            // History list immediately after an upgrade. Joined items are always
-            // preserved.
-            DateTime now = DateTime.UtcNow;
-            DateTime cutoff = now.AddMonths(-1);
-
-            data.Items.RemoveAll(delegate(GiveawayItem item)
-            {
-                if (item == null || item.Joined) return false;
-                if (!string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase))
-                {
-                    item.HistorySince = null;
-                    return false;
-                }
-
-                DateTime historySince;
-                if (string.IsNullOrWhiteSpace(item.HistorySince) ||
-                    !DateTime.TryParse(item.HistorySince, null,
-                        System.Globalization.DateTimeStyles.RoundtripKind, out historySince))
-                {
-                    // Existing History from older versions gets a fresh retention
-                    // clock instead of being deleted on first launch.
-                    item.HistorySince = now.ToString("o");
-                    return false;
-                }
-
-                return historySince.ToUniversalTime() <= cutoff;
-            });
+            // History is capped by recency, independently of the current grid sort.
+            // Joined and active entries never count toward this limit.
+            HashSet<GiveawayItem> older = new HashSet<GiveawayItem>(data.Items
+                .Where(delegate(GiveawayItem item) {
+                    return item != null && !item.Joined &&
+                        string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase);
+                })
+                .OrderByDescending(HistoryRecency)
+                .ThenBy(delegate(GiveawayItem item) { return item.Url ?? ""; }, StringComparer.OrdinalIgnoreCase)
+                .Skip(30));
+            data.Items.RemoveAll(delegate(GiveawayItem item) { return older.Contains(item); });
         }
 
+        private static DateTime HistoryRecency(GiveawayItem item)
+        {
+            DateTime timestamp;
+            if (DateTime.TryParse(item.HistorySince, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out timestamp))
+                return timestamp.ToUniversalTime();
+            if (DateTime.TryParse(item.LastChecked, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out timestamp))
+                return timestamp.ToUniversalTime();
+            return DateTime.MinValue;
+        }
         private static void ImportOldDataIfPresent()
         {
             if (File.Exists(DataFile)) return;
@@ -260,192 +257,6 @@ namespace SkinClubGiveawayDesktop
     // terminates all browser child processes if the app closes or crashes.
     // We also keep the root Process handles so a normal FormClosing can clean
     // them up immediately instead of leaving background giveaway tabs behind.
-    public static class BrowserProcessManager
-    {
-        private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
-        private const int JobObjectExtendedLimitInformation = 9;
-        private static readonly object Gate = new object();
-        private static readonly Dictionary<int, Process> Tracked = new Dictionary<int, Process>();
-        private static IntPtr jobHandle = IntPtr.Zero;
-        private static bool initialized = false;
-        private static bool shuttingDown = false;
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
-        {
-            public long PerProcessUserTimeLimit;
-            public long PerJobUserTimeLimit;
-            public uint LimitFlags;
-            public UIntPtr MinimumWorkingSetSize;
-            public UIntPtr MaximumWorkingSetSize;
-            public uint ActiveProcessLimit;
-            public long Affinity;
-            public uint PriorityClass;
-            public uint SchedulingClass;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct IO_COUNTERS
-        {
-            public ulong ReadOperationCount;
-            public ulong WriteOperationCount;
-            public ulong OtherOperationCount;
-            public ulong ReadTransferCount;
-            public ulong WriteTransferCount;
-            public ulong OtherTransferCount;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-        {
-            public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
-            public IO_COUNTERS IoInfo;
-            public UIntPtr ProcessMemoryLimit;
-            public UIntPtr JobMemoryLimit;
-            public UIntPtr PeakProcessMemoryUsed;
-            public UIntPtr PeakJobMemoryUsed;
-        }
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool SetInformationJobObject(IntPtr hJob, int infoType, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CloseHandle(IntPtr hObject);
-
-        private static void EnsureJobLocked()
-        {
-            if (initialized) return;
-            initialized = true;
-            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return;
-
-            IntPtr created = IntPtr.Zero;
-            IntPtr infoPtr = IntPtr.Zero;
-            try
-            {
-                created = CreateJobObject(IntPtr.Zero, null);
-                if (created == IntPtr.Zero) return;
-
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-                infoPtr = Marshal.AllocHGlobal(length);
-                Marshal.StructureToPtr(info, infoPtr, false);
-                if (!SetInformationJobObject(created, JobObjectExtendedLimitInformation, infoPtr, (uint)length))
-                {
-                    CloseHandle(created);
-                    created = IntPtr.Zero;
-                    return;
-                }
-                jobHandle = created;
-                created = IntPtr.Zero;
-            }
-            catch
-            {
-                if (created != IntPtr.Zero) try { CloseHandle(created); } catch { }
-            }
-            finally
-            {
-                if (infoPtr != IntPtr.Zero) Marshal.FreeHGlobal(infoPtr);
-            }
-        }
-
-        public static void Register(Process process)
-        {
-            if (process == null) return;
-            lock (Gate)
-            {
-                if (shuttingDown) return;
-                EnsureJobLocked();
-                try
-                {
-                    int pid = process.Id;
-                    Tracked[pid] = process;
-                    if (jobHandle != IntPtr.Zero && !process.HasExited)
-                        AssignProcessToJobObject(jobHandle, process.Handle);
-                }
-                catch { }
-            }
-        }
-
-        private static void Unregister(Process process)
-        {
-            if (process == null) return;
-            lock (Gate)
-            {
-                try { Tracked.Remove(process.Id); } catch { }
-            }
-        }
-
-        private static void TaskKillTree(Process process)
-        {
-            if (process == null) return;
-            int pid = 0;
-            try { pid = process.Id; } catch { }
-            if (pid <= 0 || Environment.OSVersion.Platform != PlatformID.Win32NT) return;
-            try
-            {
-                ProcessStartInfo killInfo = new ProcessStartInfo();
-                killInfo.FileName = "taskkill.exe";
-                killInfo.Arguments = "/PID " + pid + " /T /F";
-                killInfo.UseShellExecute = false;
-                killInfo.CreateNoWindow = true;
-                killInfo.WindowStyle = ProcessWindowStyle.Hidden;
-                using (Process killer = Process.Start(killInfo))
-                {
-                    if (killer != null) killer.WaitForExit(2500);
-                }
-            }
-            catch { }
-        }
-
-        public static void KillProcessTree(Process process)
-        {
-            if (process == null) return;
-            Unregister(process);
-            TaskKillTree(process);
-            try { if (!process.HasExited) process.Kill(); } catch { }
-            try { process.Dispose(); } catch { }
-        }
-
-        public static void Shutdown()
-        {
-            List<Process> roots;
-            IntPtr handleToClose;
-            lock (Gate)
-            {
-                if (shuttingDown) return;
-                shuttingDown = true;
-                roots = Tracked.Values.ToList();
-                Tracked.Clear();
-                handleToClose = jobHandle;
-                jobHandle = IntPtr.Zero;
-            }
-
-            // First ask taskkill to tear down each known tree. Then close the Job
-            // Object as the fail-safe: KILL_ON_JOB_CLOSE catches any Chromium child
-            // that escaped between Process.Start() and our tracking code.
-            foreach (Process process in roots)
-                TaskKillTree(process);
-
-            if (handleToClose != IntPtr.Zero)
-            {
-                try { CloseHandle(handleToClose); } catch { }
-            }
-
-            foreach (Process process in roots)
-            {
-                try { if (!process.HasExited) process.Kill(); } catch { }
-                try { process.Dispose(); } catch { }
-            }
-        }
-    }
-
     public static class Scanner
     {
         public static readonly SemaphoreSlim ScanLock = new SemaphoreSlim(1, 1);
@@ -533,11 +344,11 @@ namespace SkinClubGiveawayDesktop
             RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
         private static readonly HttpClient Client = MakeClient();
-        // Rendering is the expensive path: each Chromium instance creates several child
-        // processes. Allow a maximum of five hidden renders at once for a better balance
-        // between Deep Search speed and resource usage. HTTP discovery still runs
-        // concurrently; only the JS-render fallback is capped here.
-        private static readonly SemaphoreSlim RenderFallbackThrottle = new SemaphoreSlim(5, 5);
+        // HTTP discovery stays concurrent. Render one page at a time, with Windows
+        // enforcing five browser processes total INCLUDING the root and all children.
+        private static readonly SemaphoreSlim RenderFallbackThrottle = new SemaphoreSlim(1, 1);
+        private static int queuedRenders;
+        public static int QueuedRenders { get { return Volatile.Read(ref queuedRenders); } }
         private static readonly object RenderCacheGate = new object();
         private static readonly Dictionary<string, Tuple<DateTime, RenderedFields>> RenderCache =
             new Dictionary<string, Tuple<DateTime, RenderedFields>>(StringComparer.OrdinalIgnoreCase);
@@ -927,13 +738,13 @@ namespace SkinClubGiveawayDesktop
             return value == null ? "" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        private static async Task<string> DevToolsEvaluateAsync(string websocketUrl, string expression)
+        private static async Task<string> DevToolsEvaluateAsync(string websocketUrl, string expression, CancellationToken token)
         {
             if (string.IsNullOrWhiteSpace(websocketUrl)) return "";
             using (ClientWebSocket ws = new ClientWebSocket())
             {
-                CancellationTokenSource connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await ws.ConnectAsync(new Uri(websocketUrl), connectCts.Token);
+                ws.Options.Proxy = null;
+                await ws.ConnectAsync(new Uri(websocketUrl), token);
 
                 JavaScriptSerializer js = new JavaScriptSerializer();
                 Dictionary<string, object> payload = new Dictionary<string, object>();
@@ -946,7 +757,7 @@ namespace SkinClubGiveawayDesktop
                 payload["params"] = parameters;
 
                 byte[] outgoing = Encoding.UTF8.GetBytes(js.Serialize(payload));
-                await ws.SendAsync(new ArraySegment<byte>(outgoing), WebSocketMessageType.Text, true, CancellationToken.None);
+                await ws.SendAsync(new ArraySegment<byte>(outgoing), WebSocketMessageType.Text, true, token);
 
                 using (MemoryStream ms = new MemoryStream())
                 {
@@ -954,13 +765,8 @@ namespace SkinClubGiveawayDesktop
                     DateTime expires = DateTime.UtcNow.AddSeconds(8);
                     while (DateTime.UtcNow < expires && ws.State == WebSocketState.Open)
                     {
-                        CancellationTokenSource receiveCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                         WebSocketReceiveResult rr;
-                        try
-                        {
-                            rr = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), receiveCts.Token);
-                        }
-                        catch (OperationCanceledException) { continue; }
+                        rr = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
 
                         if (rr.MessageType == WebSocketMessageType.Close) break;
                         ms.Write(buffer, 0, rr.Count);
@@ -1034,57 +840,80 @@ namespace SkinClubGiveawayDesktop
             BrowserProcessManager.KillProcessTree(process);
         }
 
+        private static void RemoveRenderProfile(string profileDir)
+        {
+            if (string.IsNullOrWhiteSpace(profileDir)) return;
+            string fullPath = Path.GetFullPath(profileDir);
+            string tempRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
+            if (!string.Equals(Path.GetDirectoryName(fullPath), tempRoot, StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFileName(fullPath).StartsWith("SkinClubGWFinder_", StringComparison.Ordinal))
+                throw new InvalidOperationException("Refusing to remove a profile outside the app's temporary folder");
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                try
+                {
+                    if (Directory.Exists(fullPath)) Directory.Delete(fullPath, true);
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    if (attempt == 7) { ActivityLog.Write("CLEANUP", "Temporary profile still locked after browser exit: " + ex.Message); return; }
+                    Thread.Sleep(150);
+                }
+                catch (UnauthorizedAccessException ex)
+                { ActivityLog.Write("CLEANUP", "Temporary profile could not be removed: " + ex.Message); return; }
+            }
+        }
+
         private static async Task<RenderedFields> FetchRenderedFieldsAsync(string url)
         {
             RenderedFields cachedFields;
-            if (TryGetRenderedCache(url, out cachedFields)) return cachedFields;
+            if (TryGetRenderedCache(url, out cachedFields))
+            { ActivityLog.Write("CACHE", "Using rendered metadata: " + url); return cachedFields; }
 
             RenderedFields best = new RenderedFields();
             if (string.IsNullOrWhiteSpace(url)) return best;
             string browser = FindChromiumBrowser();
-            if (string.IsNullOrWhiteSpace(browser)) return best;
+            if (string.IsNullOrWhiteSpace(browser))
+            { ActivityLog.Write("ERROR", "No Edge or Chrome installation found for " + url); return best; }
 
-            await RenderFallbackThrottle.WaitAsync();
+            Interlocked.Increment(ref queuedRenders);
+            ActivityLog.Write("QUEUE", "Waiting to render " + url);
+            try { await RenderFallbackThrottle.WaitAsync(BrowserProcessManager.ShutdownToken); }
+            finally { Interlocked.Decrement(ref queuedRenders); }
             string profileDir = null;
             Process process = null;
+            HttpClient localClient = null;
+            CancellationTokenSource renderCts = CancellationTokenSource.CreateLinkedTokenSource(BrowserProcessManager.ShutdownToken);
+            renderCts.CancelAfter(TimeSpan.FromSeconds(30));
+            CancellationToken token = renderCts.Token;
             try
             {
-                // Let Chromium choose its own DevTools port. The previous build first asked
-                // Windows for a free port and then released it before Chromium started. With
-                // up to five renders running concurrently, two renders could occasionally be
-                // handed the same port and one validator could connect to another giveaway's
-                // browser session. That is how metadata from ErycTriceps could appear on SAMZ.
+                token.ThrowIfCancellationRequested();
+                if (TryGetRenderedCache(url, out cachedFields)) return cachedFields;
+                ActivityLog.Write("RENDER", "Loading " + url);
+                // Let Chromium choose its own DevTools port and use an isolated profile.
                 profileDir = Path.Combine(Path.GetTempPath(), "SkinClubGWFinder_" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(profileDir);
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--headless=new --disable-gpu --disable-extensions --no-first-run --no-default-browser-check " +
+                psi.Arguments = "--headless=new --disable-gpu --in-process-gpu --enable-features=NetworkServiceInProcess2 --disable-extensions --no-first-run --no-default-browser-check " +
                                 "--disable-sync --mute-audio --disable-background-networking --disable-component-update " +
                                 "--disable-features=MediaRouter,OptimizationHints,Translate,BackForwardCache " +
-                                "--renderer-process-limit=2 --blink-settings=imagesEnabled=false " +
+                                "--renderer-process-limit=1 --disable-background-mode --disable-crash-reporter --blink-settings=imagesEnabled=false " +
                                 "--remote-allow-origins=* --remote-debugging-port=0" +
                                 " --user-data-dir=\"" + profileDir + "\" \"" + url.Replace("\"", "") + "\"";
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
 
-                process = new Process();
-                process.StartInfo = psi;
-                process.Start();
-                // Register immediately so app-owned Edge/Chrome processes belong to the
-                // kill-on-close Job Object and cannot survive after the app exits.
-                BrowserProcessManager.Register(process);
+                process = BrowserProcessManager.StartHidden(psi.FileName, psi.Arguments);
                 try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
-                // Drain pipes immediately so Chromium can never block on logging.
-                Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
-                Task<string> stderrTask = process.StandardError.ReadToEndAsync();
 
                 HttpClientHandler localHandler = new HttpClientHandler();
                 localHandler.UseProxy = false;
-                HttpClient localClient = new HttpClient(localHandler);
+                localClient = new HttpClient(localHandler);
                 localClient.Timeout = TimeSpan.FromSeconds(2);
                 string websocketUrl = "";
                 int port = 0;
@@ -1094,9 +923,10 @@ namespace SkinClubGiveawayDesktop
 
                 // With --remote-debugging-port=0 Chromium writes the actual selected port
                 // to DevToolsActivePort in this render's unique profile directory. This is
-                // race-free even when five browser renders start at the same time.
+                // independent of other applications using DevTools.
                 while (DateTime.UtcNow < discoveryDeadline && port <= 0)
                 {
+                    token.ThrowIfCancellationRequested();
                     try
                     {
                         string activePortFile = Path.Combine(profileDir, "DevToolsActivePort");
@@ -1109,14 +939,20 @@ namespace SkinClubGiveawayDesktop
                         }
                     }
                     catch { }
-                    if (port <= 0) await Task.Delay(100);
+                    if (port <= 0) await Task.Delay(100, token);
                 }
 
                 while (DateTime.UtcNow < discoveryDeadline && port > 0 && string.IsNullOrWhiteSpace(websocketUrl))
                 {
+                    token.ThrowIfCancellationRequested();
                     try
                     {
-                        string tabsJson = await localClient.GetStringAsync("http://127.0.0.1:" + port + "/json/list");
+                        string tabsJson;
+                        using (HttpResponseMessage response = await localClient.GetAsync("http://127.0.0.1:" + port + "/json/list", token))
+                        {
+                            response.EnsureSuccessStatusCode();
+                            tabsJson = await response.Content.ReadAsStringAsync();
+                        }
                         JavaScriptSerializer serializer = new JavaScriptSerializer();
                         object[] tabs = serializer.Deserialize<object[]>(tabsJson);
                         foreach (object tabObj in tabs)
@@ -1143,10 +979,11 @@ namespace SkinClubGiveawayDesktop
                         }
                     }
                     catch { }
-                    if (string.IsNullOrWhiteSpace(websocketUrl)) await Task.Delay(150);
+                    if (string.IsNullOrWhiteSpace(websocketUrl)) await Task.Delay(150, token);
                 }
 
-                if (string.IsNullOrWhiteSpace(websocketUrl)) return best;
+                if (string.IsNullOrWhiteSpace(websocketUrl))
+                { ActivityLog.Write("TIMEOUT", "No page target within 8 seconds: " + url); return best; }
 
                 // Read the text the user actually sees. The previous build scanned
                 // hidden JS/state too, which could pick an unrelated timer and produce
@@ -1215,8 +1052,8 @@ namespace SkinClubGiveawayDesktop
                 DateTime renderDeadline = DateTime.UtcNow.AddSeconds(10);
                 while (DateTime.UtcNow < renderDeadline)
                 {
-                    string renderedData = await DevToolsEvaluateAsync(websocketUrl, expression);
-                    string metadata = await DevToolsEvaluateAsync(websocketUrl, metadataExpression);
+                    string renderedData = await DevToolsEvaluateAsync(websocketUrl, expression, token);
+                    string metadata = await DevToolsEvaluateAsync(websocketUrl, metadataExpression, token);
 
                     if (!string.IsNullOrWhiteSpace(renderedData) || !string.IsNullOrWhiteSpace(metadata))
                     {
@@ -1239,27 +1076,35 @@ namespace SkinClubGiveawayDesktop
                         if (best.Deadline != "-" && best.PromoCode != "-" && best.MinimumDeposit != "-")
                         {
                             StoreRenderedCache(url, best);
+                            ActivityLog.Write("RENDER", "Metadata complete: " + url);
                             return CloneRenderedFields(best);
                         }
                     }
-                    await Task.Delay(500);
+                    await Task.Delay(500, token);
                 }
                 StoreRenderedCache(url, best);
+                ActivityLog.Write("RENDER", "Finished with partial metadata: " + url);
                 return CloneRenderedFields(best);
             }
-            catch
+            catch (Exception ex)
             {
-                StoreRenderedCache(url, best);
+                ActivityLog.Write(ex is OperationCanceledException ? "TIMEOUT" : "ERROR", "Render stopped: " + url + " — " + ex.Message);
                 return CloneRenderedFields(best);
             }
             finally
             {
-                KillProcessTree(process);
-                if (!string.IsNullOrWhiteSpace(profileDir))
+                try
                 {
-                    try { Directory.Delete(profileDir, true); } catch { }
+                    KillProcessTree(process);
+                    RemoveRenderProfile(profileDir);
                 }
-                RenderFallbackThrottle.Release();
+                catch (Exception ex) { ActivityLog.Write("ERROR", "Browser cleanup failed; further launches blocked: " + ex.Message); }
+                finally
+                {
+                    if (localClient != null) localClient.Dispose();
+                    renderCts.Dispose();
+                    RenderFallbackThrottle.Release();
+                }
             }
         }
 
@@ -1587,6 +1432,7 @@ namespace SkinClubGiveawayDesktop
             await throttle.WaitAsync();
             try
             {
+                ActivityLog.Write("CHECK", c.Url);
                 GiveawayItem item = new GiveawayItem
                 {
                     Creator = InferCreator(c.Url, c.Creator), Url = CleanDiscoveredUrl(c.Url), Status = "unknown", Ticket = "-", PromoCode = "-", MinimumDeposit = "-", Deadline = "-",
@@ -1594,14 +1440,23 @@ namespace SkinClubGiveawayDesktop
                 };
                 try
                 {
-                    HttpResponseMessage r = await Client.GetAsync(c.Url);
-                    item.Url = CleanDiscoveredUrl(r.RequestMessage.RequestUri.ToString());
+                    string html;
+                    using (HttpResponseMessage r = await Client.GetAsync(c.Url))
+                    {
                     if (!r.IsSuccessStatusCode)
                     {
                         item.Error = "HTTP " + (int)r.StatusCode;
                         return item;
                     }
-                    string html = await r.Content.ReadAsStringAsync();
+                    // Keep the requested giveaway identity on failures and redirects.
+                    // A redirect to a homepage must not orphan the saved dated entry.
+                    if (!string.Equals(GiveawayKey(c.Url), GiveawayKey(r.RequestMessage.RequestUri.ToString()), StringComparison.OrdinalIgnoreCase))
+                    {
+                        item.Error = "Page redirected to a different giveaway or homepage";
+                        return item;
+                    }
+                    html = await r.Content.ReadAsStringAsync();
+                    }
                     ParseResult p = ParsePage(html);
                     item.Status = p.Status;
                     item.Ticket = p.Ticket;
@@ -1654,6 +1509,7 @@ namespace SkinClubGiveawayDesktop
                     item.Error = ex.Message.Length > 160 ? ex.Message.Substring(0, 160) : ex.Message;
                     return item;
                 }
+                finally { ActivityLog.Write(item.Error == null ? "RESULT" : "ERROR", c.Url + " — " + item.Status + (item.Error == null ? "" : ": " + item.Error)); }
             }
             finally { throttle.Release(); }
         }
@@ -1735,6 +1591,7 @@ namespace SkinClubGiveawayDesktop
             await ScanLock.WaitAsync();
             try
             {
+                ActivityLog.Write("SCAN", "Refreshing saved giveaways");
                 List<Candidate> cs = new List<Candidate>();
                 foreach (GiveawayItem i in data.Items)
                 {
@@ -1762,6 +1619,7 @@ namespace SkinClubGiveawayDesktop
                 MergeItems(data, updates);
                 data.LastScan = DateTime.UtcNow.ToString("o");
                 DataStore.Save(data);
+                ActivityLog.Write("SCAN", "Refresh complete; " + updates.Length + " pages checked");
                 return data;
             }
             finally { ScanLock.Release(); }
@@ -1843,13 +1701,19 @@ namespace SkinClubGiveawayDesktop
 
         private static async Task<string> GetStringSafeAsync(string url)
         {
+            ActivityLog.Write("SOURCE", "Fetching " + url);
             try
             {
-                HttpResponseMessage r = await Client.GetAsync(url);
-                if (!r.IsSuccessStatusCode) return "";
-                return await r.Content.ReadAsStringAsync();
+                using (HttpResponseMessage r = await Client.GetAsync(url))
+                {
+                    if (!r.IsSuccessStatusCode)
+                    { ActivityLog.Write("ERROR", "HTTP " + (int)r.StatusCode + " fetching " + url); return ""; }
+                    string content = await r.Content.ReadAsStringAsync();
+                    ActivityLog.Write("SOURCE", "Received " + content.Length + " characters from " + url);
+                    return content;
+                }
             }
-            catch { return ""; }
+            catch (Exception ex) { ActivityLog.Write("ERROR", "Source failed: " + url + " — " + ex.Message); return ""; }
         }
 
         private static async Task<List<Candidate>> DiscoverTelegramAsync()
@@ -2053,6 +1917,7 @@ namespace SkinClubGiveawayDesktop
             await ScanLock.WaitAsync();
             try
             {
+                ActivityLog.Write("SCAN", "Deep Search started: Telegram, YouTube, partner socials and web search");
                 Task<List<Candidate>> telegram = DiscoverTelegramAsync();
                 Task<List<Candidate>> youtube = DiscoverYoutubeAsync();
                 Task<List<Candidate>> partnerSocials = DiscoverPartnerSocialsAsync();
@@ -2083,6 +1948,7 @@ namespace SkinClubGiveawayDesktop
                     }
                 }
                 candidates = dedup.Values.ToList();
+                ActivityLog.Write("SCAN", "Discovery complete; validating " + candidates.Count + " unique candidate pages");
                 HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
 
                 List<GiveawayItem> useful = new List<GiveawayItem>();
@@ -2104,6 +1970,7 @@ namespace SkinClubGiveawayDesktop
                 data.LastScan = DateTime.UtcNow.ToString("o");
                 data.LastDeepScan = data.LastScan;
                 DataStore.Save(data);
+                ActivityLog.Write("SCAN", "Deep Search complete; " + useful.Count + " useful results saved");
                 return data;
             }
             finally { ScanLock.Release(); }
@@ -2299,8 +2166,8 @@ namespace SkinClubGiveawayDesktop
             g.Clear(Parent == null ? BackColor : Parent.BackColor);
 
             Rectangle shadowRect = new Rectangle(2, 5, Math.Max(1, Width - 5), Math.Max(1, Height - 7));
-            using (GraphicsPath shadowPath = RoundedRect(shadowRect, 6))
-            using (SolidBrush shadow = new SolidBrush(Color.FromArgb(95, 0, 0, 0)))
+            using (GraphicsPath shadowPath = RoundedRect(shadowRect, 11))
+            using (SolidBrush shadow = new SolidBrush(Color.FromArgb(35, 0, 0, 0)))
                 g.FillPath(shadow, shadowPath);
 
             int y = pressed ? 3 : 1;
@@ -2318,7 +2185,7 @@ namespace SkinClubGiveawayDesktop
                 bottom = Blend(bottom, Color.FromArgb(58, 62, 72), 0.55);
             }
 
-            using (GraphicsPath facePath = RoundedRect(face, 6))
+            using (GraphicsPath facePath = RoundedRect(face, 11))
             using (LinearGradientBrush fill = new LinearGradientBrush(face, top, bottom, LinearGradientMode.Vertical))
             using (Pen border = new Pen(Enabled ? BorderColor3D : Blend(BorderColor3D, Color.Gray, 0.55)))
             {
@@ -2326,11 +2193,8 @@ namespace SkinClubGiveawayDesktop
                 g.DrawPath(border, facePath);
             }
 
-            // Thin top highlight + lower edge create real depth without looking glossy/toy-like.
-            using (Pen hi = new Pen(Color.FromArgb(pressed ? 35 : 85, 255, 255, 255)))
-                g.DrawLine(hi, 8, face.Top + 1, Math.Max(8, Width - 11), face.Top + 1);
-            using (Pen low = new Pen(Color.FromArgb(70, 0, 0, 0)))
-                g.DrawLine(low, 8, face.Bottom - 1, Math.Max(8, Width - 11), face.Bottom - 1);
+            if (Focused && ShowFocusCues)
+                ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(face, -5, -5), ForeColor, BottomColor);
 
             Color text = Enabled ? ForeColor : Color.FromArgb(145, 153, 168);
             TextRenderer.DrawText(g, Text, Font, face, text,
@@ -2450,6 +2314,20 @@ namespace SkinClubGiveawayDesktop
             return Color.FromArgb(a, color.R, color.G, color.B);
         }
 
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            if (Width <= 0 || Height <= 0) return;
+            // Clip the native control too: transparent WinForms controls otherwise
+            // paint a rectangular patch of the parent over the grid beneath them.
+            using (GraphicsPath outline = RoundedRect(ClientRectangle, Math.Min(Width, Height) / 2))
+            {
+                Region previous = Region;
+                Region = new Region(outline);
+                if (previous != null) previous.Dispose();
+            }
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
@@ -2462,7 +2340,7 @@ namespace SkinClubGiveawayDesktop
             Color borderColor = WithAlpha(ToastBorder, animationAlpha);
             Color textColor = WithAlpha(ToastText, animationAlpha);
 
-            using (GraphicsPath path = RoundedRect(pill, 10))
+            using (GraphicsPath path = RoundedRect(pill, pill.Height / 2))
             using (LinearGradientBrush fill = new LinearGradientBrush(pill, top, bottom, LinearGradientMode.Vertical))
             using (Pen border = new Pen(borderColor, 1.2F))
             {
@@ -2516,18 +2394,28 @@ namespace SkinClubGiveawayDesktop
         }
     }
 
+    public class BufferedGrid : DataGridView
+    {
+        public BufferedGrid() { DoubleBuffered = true; }
+    }
+
     public class MainForm : Form
     {
         private AppData data;
         private DataGridView grid;
         private Button historyButton;
+        private Button activeButton;
+        private Button logsButton;
+        private bool showingLogs;
+        private TextBox logText;
+        private Panel logsPanel;
+        private FlowLayoutPanel logActions;
+        private readonly System.Windows.Forms.Timer logTimer = new System.Windows.Forms.Timer();
+        private long logVersion = -1;
         private Button joinedButton;
         private Button refreshButton;
         private Button deepButton;
         private Button addButton;
-        private Label activeCount;
-        private Label historyCount;
-        private Label joinedCount;
         private Label lastCheck;
         private Label viewTitle;
         private Label viewSubtitle;
@@ -2544,6 +2432,9 @@ namespace SkinClubGiveawayDesktop
         private bool showingJoined = false;
         private bool scanning = false;
         private System.Windows.Forms.Timer autoTimer;
+        private readonly System.Windows.Forms.Timer filterTimer = new System.Windows.Forms.Timer();
+        private readonly Font creatorFont = new Font("Segoe UI Semibold", 9.4F);
+        private readonly Font ticketFont = new Font("Segoe UI Semibold", 9.2F);
         private CopyToastControl copyToast;
         private string sortColumn = "Creator";
         private bool sortAscending = true;
@@ -2572,6 +2463,11 @@ namespace SkinClubGiveawayDesktop
         private readonly Color ButtonBorder = Color.FromArgb(66, 82, 112);
 
         public MainForm()
+            : this(null, true)
+        {
+        }
+
+        internal MainForm(AppData initialData, bool automaticRefresh)
         {
             Text = "SkinClub GW Finder v1.2.3";
             Width = 1240;
@@ -2602,18 +2498,36 @@ namespace SkinClubGiveawayDesktop
                 BrowserProcessManager.Shutdown();
             };
 
-            data = DataStore.Load();
+            data = initialData ?? DataStore.Load();
             // History is persisted data. Do not reset ended giveaways back to
             // unknown on startup; that made the History tab rebuild itself on
             // every launch instead of loading the saved classification.
             BuildUi();
+            ActivityLog.Write("APP", "Ready. Browser process limit: 5 total; one rendered page at a time; 30-second page timeout.");
+            logTimer.Interval = 500;
+            logTimer.Tick += delegate { UpdateLogs(); };
+            logTimer.Start();
+            filterTimer.Interval = 180;
+            filterTimer.Tick += delegate { filterTimer.Stop(); Render(); };
             Render();
 
-            Shown += async delegate { await RefreshAsync(false); };
+            if (automaticRefresh) Shown += async delegate { await RefreshAsync(false); };
             autoTimer = new System.Windows.Forms.Timer();
             autoTimer.Interval = 10 * 60 * 1000;
             autoTimer.Tick += async delegate { if (!scanning) await RefreshAsync(false); };
-            autoTimer.Start();
+            if (automaticRefresh) autoTimer.Start();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                filterTimer.Dispose();
+                logTimer.Dispose();
+                if (autoTimer != null) autoTimer.Dispose();
+            }
+            base.Dispose(disposing);
+            if (disposing) { creatorFont.Dispose(); ticketFont.Dispose(); }
         }
 
         private void RepairLegacyStatuses()
@@ -2635,6 +2549,28 @@ namespace SkinClubGiveawayDesktop
             if (changed) DataStore.Save(data);
         }
 
+        private static void RoundControl(Control control, int radius)
+        {
+            EventHandler update = delegate
+            {
+                if (control.Width < 2 || control.Height < 2) return;
+                int diameter = Math.Min(radius * 2, Math.Min(control.Width, control.Height));
+                using (GraphicsPath path = new GraphicsPath())
+                {
+                    path.AddArc(0, 0, diameter, diameter, 180, 90);
+                    path.AddArc(control.Width - diameter, 0, diameter, diameter, 270, 90);
+                    path.AddArc(control.Width - diameter, control.Height - diameter, diameter, diameter, 0, 90);
+                    path.AddArc(0, control.Height - diameter, diameter, diameter, 90, 90);
+                    path.CloseFigure();
+                    Region previous = control.Region;
+                    control.Region = new Region(path);
+                    if (previous != null) previous.Dispose();
+                }
+            };
+            control.SizeChanged += update;
+            update(control, EventArgs.Empty);
+        }
+
         private void BuildUi()
         {
             SuspendLayout();
@@ -2647,7 +2583,7 @@ namespace SkinClubGiveawayDesktop
             root.RowCount = 4;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             Controls.Add(root);
@@ -2659,10 +2595,11 @@ namespace SkinClubGiveawayDesktop
             header.BackColor = Color.FromArgb(14, 21, 36);
             header.ColumnCount = 2;
             header.RowCount = 1;
-            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48F));
-            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52F));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 350F));
             header.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(header, 0, 0);
+            RoundControl(header, 16);
 
             Panel brand = new Panel();
             brand.Dock = DockStyle.Fill;
@@ -2680,17 +2617,18 @@ namespace SkinClubGiveawayDesktop
             brand.Controls.Add(logo);
 
             Label title = new Label();
-            title.Text = "SkinClub GW Finder v1.2.3";
+            title.Text = "SkinClub GW Finder";
             title.Left = 86;
             title.Top = 17;
             title.Width = 470;
             title.Height = 34;
-            title.Font = new Font("Segoe UI Semibold", 20F);
+            title.Font = new Font("Segoe UI Semibold", 16F);
+            title.AutoEllipsis = true;
             title.ForeColor = TextColor;
             brand.Controls.Add(title);
 
             Label sub = new Label();
-            sub.Text = "Live creator giveaway monitor  •  Active pages are verified automatically";
+            sub.Text = "Discover. Track. Stay in the game.";
             sub.Left = 88;
             sub.Top = 56;
             sub.Width = 520;
@@ -2698,13 +2636,19 @@ namespace SkinClubGiveawayDesktop
             sub.ForeColor = Muted;
             sub.Font = new Font("Segoe UI", 9F);
             brand.Controls.Add(sub);
+            sub.AutoEllipsis = true;
+            brand.Resize += delegate
+            {
+                title.Width = Math.Max(1, brand.ClientSize.Width - title.Left - 12);
+                sub.Width = Math.Max(1, brand.ClientSize.Width - sub.Left - 12);
+            };
 
             Panel brandAccent = new Panel();
             brandAccent.Dock = DockStyle.Left;
             brandAccent.Width = 4;
             brandAccent.BackColor = Accent;
-            brand.Controls.Add(brandAccent);
-            brandAccent.BringToFront();
+            brandAccent.Dispose();
+
 
             FlowLayoutPanel actions = new FlowLayoutPanel();
             actions.Dock = DockStyle.Fill;
@@ -2721,21 +2665,21 @@ namespace SkinClubGiveawayDesktop
             addButton = MakeHeaderButton("+ Add link", 92, false);
             actions.Controls.Add(deepButton);
             actions.Controls.Add(refreshButton);
-            actions.Controls.Add(historyButton);
-            actions.Controls.Add(joinedButton);
+
+
             actions.Controls.Add(addButton);
 
             addButton.Click += async delegate { await AddLinkAsync(); };
             historyButton.Click += delegate
             {
-                if (showingHistory) showingHistory = false;
-                else { showingHistory = true; showingJoined = false; }
+                showingHistory = true; showingJoined = false; showingLogs = false;
+
                 Render();
             };
             joinedButton.Click += delegate
             {
-                if (showingJoined) showingJoined = false;
-                else { showingJoined = true; showingHistory = false; }
+                showingJoined = true; showingHistory = false; showingLogs = false;
+
                 Render();
             };
             refreshButton.Click += async delegate { await RefreshAsync(true); };
@@ -2758,13 +2702,25 @@ namespace SkinClubGiveawayDesktop
             stats.BackColor = Bg;
             toolbar.Controls.Add(stats, 0, 0);
 
-            activeCount = MakeStatLabel("ACTIVE  0", 118, Success);
-            historyCount = MakeStatLabel("HISTORY  0", 126, Muted);
-            joinedCount = MakeStatLabel("JOINED  0", 118, Accent);
             lastCheck = MakeStatLabel("LAST CHECK  NEVER", 222, Accent2);
-            stats.Controls.Add(activeCount);
-            stats.Controls.Add(historyCount);
-            stats.Controls.Add(joinedCount);
+            activeButton = MakeHeaderButton("Active", 140, false);
+            activeButton.Click += delegate { showingHistory = false; showingJoined = false; showingLogs = false; Render(); };
+            activeButton.Margin = new Padding(0, 5, 8, 0);
+            joinedButton.Width = historyButton.Width = 140;
+            joinedButton.Margin = historyButton.Margin = new Padding(0, 5, 8, 0);
+            stats.Controls.Add(activeButton);
+            stats.Controls.Add(joinedButton);
+            stats.Controls.Add(historyButton);
+            logsButton = MakeHeaderButton("Logs", 100, false);
+            logsButton.Margin = new Padding(0, 5, 8, 0);
+            logsButton.Click += delegate { showingLogs = true; showingHistory = false; showingJoined = false; Render(); };
+            stats.Controls.Add(logsButton);
+            lastCheck.Width = 300;
+            lastCheck.BackColor = Bg;
+            lastCheck.ForeColor = Muted;
+            lastCheck.TextAlign = ContentAlignment.MiddleLeft;
+
+
             stats.Controls.Add(lastCheck);
 
             // Dedicated activity/search-status row. Keeping this outside the table/card
@@ -2776,6 +2732,7 @@ namespace SkinClubGiveawayDesktop
             activityBar.Padding = new Padding(12, 0, 12, 0);
             activityBar.BackColor = Color.FromArgb(12, 19, 32);
             root.Controls.Add(activityBar, 0, 2);
+            RoundControl(activityBar, 10);
 
             scanStatus = new Label();
             scanStatus.Dock = DockStyle.Fill;
@@ -2803,6 +2760,7 @@ namespace SkinClubGiveawayDesktop
             card.RowStyles.Add(new RowStyle(SizeType.Absolute, 3F));
             card.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(card, 0, 3);
+            RoundControl(card, 14);
 
             TableLayoutPanel cardHeader = new TableLayoutPanel();
             cardHeaderPanel = cardHeader;
@@ -2810,8 +2768,9 @@ namespace SkinClubGiveawayDesktop
             cardHeader.BackColor = Surface;
             cardHeader.ColumnCount = 2;
             cardHeader.RowCount = 1;
-            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58F));
-            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42F));
+            cardHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 430F));
             card.Controls.Add(cardHeader, 0, 0);
 
             TableLayoutPanel titlePanel = new TableLayoutPanel();
@@ -2855,10 +2814,30 @@ namespace SkinClubGiveawayDesktop
             filterPanel.BackColor = Surface;
             filterPanel.ColumnCount = 3;
             filterPanel.RowCount = 1;
-            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54F));
-            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 122F));
+            filterPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60F));
+            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145F));
             filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            cardHeader.Controls.Add(filterPanel, 1, 0);
+            Panel headerTools = new Panel();
+            headerTools.Dock = DockStyle.Fill;
+            headerTools.Margin = new Padding(0);
+            headerTools.Controls.Add(filterPanel);
+            cardHeader.Controls.Add(headerTools, 1, 0);
+            logActions = new FlowLayoutPanel();
+            logActions.Dock = DockStyle.Fill;
+            logActions.FlowDirection = FlowDirection.RightToLeft;
+            logActions.Padding = new Padding(8, 12, 12, 0);
+            Button copyLogs = MakeHeaderButton("Copy logs", 100, false);
+            copyLogs.Click += delegate
+            {
+                try { if (logText.TextLength > 0) Clipboard.SetText(logText.Text); }
+                catch { scanStatus.Text = "Clipboard is busy - try again"; }
+            };
+            Button clearLogs = MakeHeaderButton("Clear", 80, false);
+            clearLogs.Click += delegate { ActivityLog.Clear(); UpdateLogs(); };
+            logActions.Controls.Add(copyLogs);
+            logActions.Controls.Add(clearLogs);
+            headerTools.Controls.Add(logActions);
 
             Panel viewAccent = new Panel();
             viewAccentRef = viewAccent;
@@ -2882,6 +2861,16 @@ namespace SkinClubGiveawayDesktop
             filterFieldBox.Margin = new Padding(0, 1, 8, 1);
             filterFieldBox.DropDownStyle = ComboBoxStyle.DropDownList;
             filterFieldBox.FlatStyle = FlatStyle.Flat;
+            filterFieldBox.DrawMode = DrawMode.OwnerDrawFixed;
+            filterFieldBox.DrawItem += delegate(object sender, DrawItemEventArgs e)
+            {
+                if (e.Index < 0) return;
+                using (SolidBrush background = new SolidBrush((e.State & DrawItemState.Selected) != 0 ? Surface3 : Surface))
+                    e.Graphics.FillRectangle(background, e.Bounds);
+                TextRenderer.DrawText(e.Graphics, filterFieldBox.Items[e.Index].ToString(), filterFieldBox.Font,
+                    e.Bounds, TextColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                e.DrawFocusRectangle();
+            };
             filterFieldBox.BackColor = Surface3;
             filterFieldBox.ForeColor = TextColor;
             filterFieldBox.Font = new Font("Segoe UI", 8.7F);
@@ -2897,7 +2886,8 @@ namespace SkinClubGiveawayDesktop
             filterBox.BackColor = Surface3;
             filterBox.ForeColor = TextColor;
             filterBox.Font = new Font("Segoe UI", 9F);
-            filterBox.TextChanged += delegate { if (grid != null) Render(); };
+            filterBox.AccessibleName = "Search giveaways";
+            filterBox.TextChanged += delegate { filterTimer.Stop(); filterTimer.Start(); };
             filterBox.KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Escape && filterBox.TextLength > 0)
@@ -2908,7 +2898,7 @@ namespace SkinClubGiveawayDesktop
             };
             filterPanel.Controls.Add(filterBox, 2, 0);
 
-            grid = new DataGridView();
+            grid = new BufferedGrid();
             grid.Dock = DockStyle.Fill;
             grid.Margin = new Padding(0);
             grid.BackgroundColor = Surface2;
@@ -2925,6 +2915,7 @@ namespace SkinClubGiveawayDesktop
             grid.ReadOnly = true;
             grid.EnableHeadersVisualStyles = false;
             grid.ColumnHeadersVisible = true;
+            grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
             grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             grid.ColumnHeadersHeight = 46;
             grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(18, 27, 43);
@@ -2946,9 +2937,10 @@ namespace SkinClubGiveawayDesktop
             DataGridViewTextBoxColumn creator = new DataGridViewTextBoxColumn();
             creator.Name = "Creator";
             creator.HeaderText = "CREATOR";
-            creator.Width = 155;
+            creator.Width = 145;
             creator.MinimumWidth = 145;
             creator.SortMode = DataGridViewColumnSortMode.Programmatic;
+            creator.DefaultCellStyle.Font = creatorFont;
 
             DataGridViewLinkColumn link = new DataGridViewLinkColumn();
             link.Name = "Link";
@@ -2970,12 +2962,13 @@ namespace SkinClubGiveawayDesktop
             ticket.HeaderText = "TICKET";
             ticket.Width = 110;
             ticket.SortMode = DataGridViewColumnSortMode.Programmatic;
+            ticket.DefaultCellStyle.Font = ticketFont;
             ticket.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
 
             DataGridViewTextBoxColumn promo = new DataGridViewTextBoxColumn();
             promo.Name = "PromoCode";
             promo.HeaderText = "PROMOCODE";
-            promo.Width = 220;
+            promo.Width = 200;
             promo.MinimumWidth = 190;
             promo.SortMode = DataGridViewColumnSortMode.Programmatic;
             // Reserve room for the inline copy icon.
@@ -2990,7 +2983,7 @@ namespace SkinClubGiveawayDesktop
             DataGridViewTextBoxColumn deadline = new DataGridViewTextBoxColumn();
             deadline.Name = "Deadline";
             deadline.HeaderText = "DEADLINE";
-            deadline.Width = 135;
+            deadline.Width = 125;
             deadline.SortMode = DataGridViewColumnSortMode.Programmatic;
 
             DataGridViewButtonColumn joinedAction = MakeIconColumn("JoinedAction", 48);
@@ -2999,7 +2992,40 @@ namespace SkinClubGiveawayDesktop
             grid.CellMouseClick += GridCellMouseClick;
             grid.CellPainting += GridCellPainting;
             grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
-            card.Controls.Add(grid, 0, 2);
+            grid.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                if (grid.Rows.Count != 0) return;
+                string message = filterBox.TextLength > 0 ? "No matching giveaways\nTry another search or press Esc to clear."
+                    : showingJoined ? "No joined giveaways yet\nUse the + action on a giveaway to save it here."
+                    : showingHistory ? "No giveaway history yet\nEnded giveaways will appear here."
+                    : "No active giveaways yet\nRefresh saved links or run Deep Search to discover giveaways.";
+                Rectangle area = new Rectangle(20, grid.ColumnHeadersHeight + 30,
+                    Math.Max(1, grid.ClientSize.Width - 40), Math.Max(1, grid.ClientSize.Height - grid.ColumnHeadersHeight - 60));
+                TextRenderer.DrawText(e.Graphics, message, Font, area, Muted,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            };
+            Panel content = new Panel();
+            content.Dock = DockStyle.Fill;
+            content.Margin = new Padding(0);
+            content.Controls.Add(grid);
+            logsPanel = new Panel();
+            logsPanel.Dock = DockStyle.Fill;
+            logsPanel.Padding = new Padding(14);
+            logsPanel.BackColor = Surface2;
+            logText = new TextBox();
+            logText.Multiline = true;
+            logText.ScrollBars = ScrollBars.Both;
+            logText.Dock = DockStyle.Fill;
+            logText.ReadOnly = true;
+            logText.WordWrap = false;
+            logText.BorderStyle = BorderStyle.None;
+            logText.BackColor = Surface2;
+            logText.ForeColor = TextColor;
+            logText.Font = new Font("Consolas", 9F);
+            logText.AccessibleName = "Live activity logs";
+            logsPanel.Controls.Add(logText);
+            content.Controls.Add(logsPanel);
+            card.Controls.Add(content, 0, 2);
 
             ResumeLayout(true);
         }
@@ -3213,18 +3239,8 @@ namespace SkinClubGiveawayDesktop
                 }
                 else
                 {
-                    Rectangle frame = new Rectangle(r.Left + 8, r.Top + 6, 13, 18);
-                    e.Graphics.DrawRectangle(iconPen, frame);
-                    Point[] door = new Point[]
-                    {
-                        new Point(r.Left + 12, r.Top + 8),
-                        new Point(r.Left + 22, r.Top + 11),
-                        new Point(r.Left + 22, r.Top + 22),
-                        new Point(r.Left + 12, r.Top + 24)
-                    };
-                    e.Graphics.DrawPolygon(iconPen, door);
-                    using (SolidBrush knob = new SolidBrush(Color.White))
-                        e.Graphics.FillEllipse(knob, r.Left + 18, r.Top + 15, 2, 2);
+                    e.Graphics.DrawLine(iconPen, r.Left + 9, r.Top + 16, r.Right - 9, r.Top + 16);
+                    e.Graphics.DrawLine(iconPen, r.Left + 16, r.Top + 9, r.Left + 16, r.Bottom - 9);
                 }
             }
             e.Handled = true;
@@ -3244,6 +3260,7 @@ namespace SkinClubGiveawayDesktop
 
         private void GridCellMouseClick(object sender, DataGridViewCellMouseEventArgs e)
         {
+            if (e.Button != MouseButtons.Left) return;
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
             GiveawayItem item = grid.Rows[e.RowIndex].Tag as GiveawayItem;
             if (item == null) return;
@@ -3590,22 +3607,28 @@ namespace SkinClubGiveawayDesktop
             }
 
             SetDepthButtonTheme(historyButton, HistoryView, showingHistory);
+            SetDepthButtonTheme(activeButton, ActiveView, !showingHistory && !showingJoined && !showingLogs);
+            SetDepthButtonTheme(logsButton, Accent2, showingLogs);
             SetDepthButtonTheme(joinedButton, JoinedView, showingJoined);
             viewTitle.ForeColor = accent;
         }
 
         private void Render()
         {
+            if (IsDisposed || Disposing) return;
+            filterTimer.Stop();
+            logsPanel.Visible = showingLogs;
+            grid.Visible = !showingLogs;
+            filterPanelRef.Visible = !showingLogs;
+            logActions.Visible = showingLogs;
             int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
             int hc = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
             int jc = data.Items.Count(delegate(GiveawayItem i) { return i.Joined; });
-            activeCount.Text = "ACTIVE  " + ac;
-            historyCount.Text = "HISTORY  " + hc;
-            joinedCount.Text = "JOINED  " + jc;
             lastCheck.Text = "LAST CHECK  " + FormatTime(data.LastScan);
 
-            historyButton.Text = showingHistory ? "← Active" : "History";
-            joinedButton.Text = showingJoined ? "← Active" : "Joined";
+            activeButton.Text = "Active  ·  " + ac;
+            historyButton.Text = "History  ·  " + hc;
+            joinedButton.Text = "Joined  ·  " + jc;
 
             if (showingJoined)
             {
@@ -3615,7 +3638,7 @@ namespace SkinClubGiveawayDesktop
             else if (showingHistory)
             {
                 viewTitle.Text = "Giveaway history";
-                viewSubtitle.Text = "Ended giveaways are retained here with their original links";
+                viewSubtitle.Text = "The 30 most recent ended giveaways • older entries are removed automatically";
             }
             else
             {
@@ -3624,10 +3647,23 @@ namespace SkinClubGiveawayDesktop
             }
 
             ApplyViewTheme();
+            if (showingLogs)
+            {
+                viewTitle.Text = "Activity logs";
+                viewTitle.ForeColor = Accent2;
+                logsPanel.BringToFront();
+                UpdateLogs();
+                return;
+            }
 
+            GiveawayItem selectedItem = grid.CurrentRow == null ? null : grid.CurrentRow.Tag as GiveawayItem;
+            string selectedUrl = selectedItem == null ? null : selectedItem.Url;
+            int firstRow = grid.FirstDisplayedScrollingRowIndex;
+            List<GiveawayItem> visibleItems = CurrentItems();
+            if (filterBox.TextLength > 0) viewSubtitle.Text = visibleItems.Count + " matching giveaway(s) • Esc clears search";
             grid.SuspendLayout();
             grid.Rows.Clear();
-            foreach (GiveawayItem i in CurrentItems())
+            foreach (GiveawayItem i in visibleItems)
             {
                 bool ended = string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase);
                 string deadline = i.Deadline ?? "-";
@@ -3637,8 +3673,6 @@ namespace SkinClubGiveawayDesktop
                 string minimumDeposit = string.IsNullOrWhiteSpace(i.MinimumDeposit) ? "-" : i.MinimumDeposit;
                 int row = grid.Rows.Add(i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", promoCode, minimumDeposit, deadline, "");
                 grid.Rows[row].Tag = i;
-                grid.Rows[row].Cells["Creator"].Style.Font = new Font("Segoe UI Semibold", 9.4F);
-                grid.Rows[row].Cells["Ticket"].Style.Font = new Font("Segoe UI Semibold", 9.2F);
 
                 bool activeLike = string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase);
                 grid.Rows[row].Cells["Ticket"].Style.ForeColor = Muted;
@@ -3677,7 +3711,32 @@ namespace SkinClubGiveawayDesktop
                     grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Success, 0.08);
             }
             UpdateSortGlyph();
+            foreach (DataGridViewRow row in grid.Rows)
+                if (string.Equals(((GiveawayItem)row.Tag).Url, selectedUrl, StringComparison.OrdinalIgnoreCase))
+                { grid.CurrentCell = row.Cells[0]; break; }
+            if (firstRow >= 0 && grid.Rows.Count > 0)
+                grid.FirstDisplayedScrollingRowIndex = Math.Min(firstRow, grid.Rows.Count - 1);
             grid.ResumeLayout();
+            grid.Invalidate();
+        }
+
+        private void UpdateLogs()
+        {
+            if (IsDisposed || Disposing || !showingLogs) return;
+            string snapshot = ActivityLog.Snapshot(ref logVersion);
+            if (snapshot != null)
+            {
+                int selection = logText.SelectionStart;
+                bool follow = selection >= Math.Max(0, logText.TextLength - 1);
+                logText.Text = snapshot;
+                logText.SelectionStart = follow ? logText.TextLength : Math.Min(selection, logText.TextLength);
+                if (follow) logText.ScrollToCaret();
+            }
+            try
+            {
+                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/5  •  Queued pages " + Scanner.QueuedRenders + "  •  Latest 2,000 events";
+            }
+            catch { viewSubtitle.Text = "Browser count unavailable — check cleanup errors below"; }
         }
 
         private void UpdateSortGlyph()
@@ -3713,6 +3772,7 @@ namespace SkinClubGiveawayDesktop
 
         private void SetScanning(bool value, string message)
         {
+            if (IsDisposed || Disposing) return;
             scanning = value;
             refreshButton.Enabled = !value;
             deepButton.Enabled = !value;
@@ -3725,6 +3785,7 @@ namespace SkinClubGiveawayDesktop
             joinedButton.Enabled = true;
 
             scanStatus.Text = value ? message : "Ready";
+            ActivityLog.Write("APP", value ? message : "Operation finished");
             scanStatus.ForeColor = value ? Warning : Muted;
 
             // Never force the Windows busy cursor. Scanning is done on a worker
@@ -3748,12 +3809,14 @@ namespace SkinClubGiveawayDesktop
                 {
                     return await Scanner.RefreshSavedAsync(scanData);
                 });
+                if (IsDisposed || Disposing) return;
                 data = refreshed;
                 Render();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Refresh failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ActivityLog.Write("ERROR", "Refresh failed: " + ex.Message);
+                if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Refresh failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally { SetScanning(false, ""); }
         }
@@ -3769,6 +3832,7 @@ namespace SkinClubGiveawayDesktop
                 {
                     return await Scanner.DeepScanAsync(scanData);
                 });
+                if (IsDisposed || Disposing) return;
                 data = scanned;
                 Render();
                 int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
@@ -3778,16 +3842,19 @@ namespace SkinClubGiveawayDesktop
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Deep Search failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ActivityLog.Write("ERROR", "Deep Search failed: " + ex.Message);
+                if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Deep Search failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally { SetScanning(false, ""); }
         }
 
         private async Task AddLinkAsync()
         {
+            if (scanning) return;
             using (AddLinkForm f = new AddLinkForm())
             {
                 if (f.ShowDialog(this) != DialogResult.OK) return;
+                if (scanning) return;
                 if (string.IsNullOrWhiteSpace(f.GiveawayUrl)) return;
                 SetScanning(true, "Validating giveaway page...");
                 try
@@ -3798,6 +3865,7 @@ namespace SkinClubGiveawayDesktop
                     {
                         return await Scanner.ValidateOneAsync(creatorName, giveawayUrl);
                     });
+                    if (IsDisposed || Disposing) return;
                     Scanner.MergeOne(data, item);
                     Render();
                     if (item.Status == "active")
@@ -3809,7 +3877,8 @@ namespace SkinClubGiveawayDesktop
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(this, ex.Message, "Invalid link", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    ActivityLog.Write("ERROR", "Add link failed: " + ex.Message);
+                    if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Invalid link", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 finally { SetScanning(false, ""); }
             }

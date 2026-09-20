@@ -26,7 +26,7 @@ echo Building SkinClub GW Finder...
   /reference:System.Windows.Forms.dll ^
   /reference:System.Net.Http.dll ^
   /reference:System.Web.Extensions.dll ^
-  Program.cs
+  Program.cs BrowserRuntime.cs
 
 if errorlevel 1 (
   echo.

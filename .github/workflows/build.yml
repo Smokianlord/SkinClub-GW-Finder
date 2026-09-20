@@ -38,7 +38,7 @@ jobs:
             /reference:System.Windows.Forms.dll `
             /reference:System.Net.Http.dll `
             /reference:System.Web.Extensions.dll `
-            Program.cs
+            Program.cs BrowserRuntime.cs
 
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE

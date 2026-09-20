@@ -11,6 +11,7 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 - **Deep Search** across public sources, including YouTube, Telegram, web search, and known creator `.club` domains.
 - **Direct-page validation** before a giveaway is added to the tracker.
 - **Active / Joined / History workflow** for keeping giveaways organized.
+- **History limit:** keeps the 30 most recent entries by the time they entered History (falling back to last checked for older data). Excess entries are removed automatically on load and save; Joined giveaways are preserved.
 - **Joined exclusivity:** joining a giveaway removes it from Active or History and shows it only in Joined. Removing it from Joined restores it to its real Active/History state.
 - **Ticket tracking** with `remaining / total` values when available.
 - **Deadline parsing** with clean uppercase calendar dates.
@@ -19,3 +20,9 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 - **Copy and open actions** for direct giveaway links.
 - **Automatic refresh** every 10 minutes, plus manual Refresh.
 - **Persistent local data** between launches.
+- **Bounded browser usage:** one rendered page at a time, capped at five app-owned browser processes total. The complete process group is terminated and checked after each page, even if the original browser process already exited. Rendering has a 30-second timeout and an independent 45-second cleanup watchdog.
+- **Logs tab:** live page checks, render queue, browser launches, results, failures, and confirmed cleanup. Shows the current browser process count and queued pages, with Copy/Clear actions and a bounded 2,000-event session history.
+
+## Validation
+
+Run `tests/run.ps1` for UI and persistence checks, `tests/run-browser.ps1` for process limits and cleanup checks, and `tests/run-live.ps1` to validate the four real September 2026 giveaway links. Live tests make network requests and can fail if those pages change or become unavailable. Tests do not modify your saved giveaways.
