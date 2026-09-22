@@ -1,12 +1,30 @@
-# v1.2.2
+# Changelog
+
+## [1.3.0] - 2026-09-22
+
+- Added a live Logs tab with process counts, queued pages, errors, Copy/Clear, and a bounded 2,000-event session history.
+- Added dedicated Active, Joined, and History navigation with counts, rounded controls, dark search, and clearer table headers.
+- Render one page at a time with a Windows-enforced cap of five app-owned browser processes, including children.
+- Contain browser descendants before launch and terminate the complete group after each page, even if the root exits first.
+- Added render timeout, cleanup watchdog, shutdown cancellation, and temporary-profile removal retries.
+- Keep the 30 most recent History giveaways instead of applying a one-month retention rule. Joined entries are preserved.
+- Improved filtering performance and preserved row selection.
+- Added atomic saves with backups, corrupt-file preservation, and invalid saved-row handling.
+- Fixed redirect identity handling and accidental right-click actions.
+- Added UI, persistence, lifecycle, and real-link validation scripts.
+
+## [1.2.4] - 2026-09-18
+
+- Isolated Chromium/CDP sessions to prevent metadata mixing between creators.
+- Validated rendered-page hostnames and repaired mismatched saved metadata.
+
+## Earlier release notes
+
+### v1.2.2
 
 - Added the app version to the window title and main header.
 - Added v1.2.2 EXE version metadata.
 - Includes all fixes from the current sorting/deep-search build.
-
-# Changelog
-
-All notable changes to SkinClub GW Finder will be documented in this file.
 
 ## [1.0.0] - 2026-09-08
 

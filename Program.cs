@@ -22,9 +22,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("SkinClub GW Finder")]
 [assembly: AssemblyProduct("SkinClub GW Finder")]
 [assembly: AssemblyDescription("SkinClub creator giveaway monitor")]
-[assembly: AssemblyVersion("1.2.3.0")]
-[assembly: AssemblyFileVersion("1.2.3.0")]
-[assembly: AssemblyInformationalVersion("1.2.3")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyInformationalVersion("1.3.0")]
 
 namespace SkinClubGiveawayDesktop
 {
@@ -2469,7 +2469,7 @@ namespace SkinClubGiveawayDesktop
 
         internal MainForm(AppData initialData, bool automaticRefresh)
         {
-            Text = "SkinClub GW Finder v1.2.3";
+            Text = "SkinClub GW Finder v1.3.0";
             Width = 1240;
             Height = 800;
             MinimumSize = new Size(1040, 680);

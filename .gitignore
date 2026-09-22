@@ -4,6 +4,7 @@
 *.dll
 bin/
 obj/
+dist/
 
 # Local app data / temporary files
 data.json
