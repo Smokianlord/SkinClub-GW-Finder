@@ -2469,7 +2469,7 @@ namespace SkinClubGiveawayDesktop
 
         internal MainForm(AppData initialData, bool automaticRefresh)
         {
-            Text = "SkinClub GW Finder v1.3.0";
+            Text = Program.DisplayTitle;
             Width = 1240;
             Height = 800;
             MinimumSize = new Size(1040, 680);
@@ -2617,7 +2617,7 @@ namespace SkinClubGiveawayDesktop
             brand.Controls.Add(logo);
 
             Label title = new Label();
-            title.Text = "SkinClub GW Finder";
+            title.Text = Program.DisplayTitle;
             title.Left = 86;
             title.Top = 17;
             title.Width = 470;
@@ -3887,6 +3887,8 @@ namespace SkinClubGiveawayDesktop
 
     static class Program
     {
+        internal static readonly string DisplayTitle = "SkinClub GW Finder v" + typeof(Program).Assembly.GetName().Version.ToString(3);
+
         [STAThread]
         static void Main()
         {

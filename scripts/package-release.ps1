@@ -28,6 +28,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Release compilation failed' }
     $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
     if ($metadata.FileVersion -ne "$version.0" -or $metadata.ProductVersion -ne $version) { throw 'Executable version mismatch' }
+    # Keep run.bat's executable identical to the release download.
+    Copy-Item -LiteralPath $exe -Destination (Join-Path $repo 'SkinClubGWFinder.exe') -Force
     foreach ($name in @('README_FIRST.txt', 'README.md', 'CHANGELOG.md', 'VERSION.txt', 'SkinClubGWFinder.ico', 'run.bat')) {
         Copy-Item -LiteralPath (Join-Path $source $name) -Destination $portable
     }
