@@ -6,6 +6,8 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 
 > **Unofficial project:** This app is not affiliated with, endorsed by, or sponsored by SkinClub or any creator/partner it discovers.
 
+![SkinClub GW Finder](docs/screenshot.png)
+
 ## Features
 
 - **Deep Search** across public sources, including YouTube, Telegram, web search, and known creator `.club` domains.

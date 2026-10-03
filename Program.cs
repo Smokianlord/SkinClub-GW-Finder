@@ -2037,167 +2037,54 @@ namespace SkinClubGiveawayDesktop
         }
     }
 
-    public class AddLinkForm : Form
+    // Shared palette and drawing helpers for the whole interface.
+    internal static class Ui
     {
-        public string CreatorName { get { return creatorBox.Text.Trim(); } }
-        public string GiveawayUrl { get { return urlBox.Text.Trim(); } }
-        private TextBox creatorBox;
-        private TextBox urlBox;
+        public static readonly Color Bg = Color.FromArgb(11, 15, 23);
+        public static readonly Color Surface = Color.FromArgb(17, 22, 33);
+        public static readonly Color Surface2 = Color.FromArgb(22, 29, 43);
+        public static readonly Color Surface3 = Color.FromArgb(29, 37, 54);
+        public static readonly Color Line = Color.FromArgb(34, 43, 60);
+        public static readonly Color LineStrong = Color.FromArgb(52, 64, 88);
+        public static readonly Color Text = Color.FromArgb(233, 237, 245);
+        public static readonly Color TextSoft = Color.FromArgb(178, 188, 208);
+        public static readonly Color Muted = Color.FromArgb(125, 138, 162);
+        public static readonly Color Accent = Color.FromArgb(99, 102, 241);
+        public static readonly Color AccentHover = Color.FromArgb(129, 140, 248);
+        public static readonly Color AccentDark = Color.FromArgb(79, 70, 229);
+        public static readonly Color Success = Color.FromArgb(52, 211, 153);
+        public static readonly Color Warning = Color.FromArgb(251, 191, 36);
+        public static readonly Color Danger = Color.FromArgb(248, 113, 113);
 
-        private readonly Color Bg = Color.FromArgb(20, 28, 45);
-        private readonly Color Card = Color.FromArgb(34, 45, 68);
-        private readonly Color Line = Color.FromArgb(75, 91, 124);
-        private readonly Color TextColor = Color.FromArgb(246, 249, 255);
-        private readonly Color Muted = Color.FromArgb(174, 190, 216);
-        private readonly Color Accent = Color.FromArgb(132, 102, 255);
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
-        public AddLinkForm()
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hwnd, string subAppName, string subIdList);
+
+        // Dark scroll bars (Windows 10 1809+); harmless no-op on older systems.
+        public static void DarkScrollBars(Control control)
         {
-            Text = "Add giveaway";
-            Width = 620;
-            Height = 300;
-            StartPosition = FormStartPosition.CenterParent;
-            BackColor = Bg;
-            ForeColor = TextColor;
-            Font = new Font("Segoe UI", 9F);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            ShowInTaskbar = false;
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
-
-            Panel accent = new Panel();
-            accent.Dock = DockStyle.Top;
-            accent.Height = 4;
-            accent.BackColor = Accent;
-            Controls.Add(accent);
-
-            Label title = new Label();
-            title.Text = "Add giveaway link";
-            title.Left = 24;
-            title.Top = 24;
-            title.Width = 430;
-            title.Height = 32;
-            title.Font = new Font("Segoe UI Semibold", 16F);
-            title.ForeColor = TextColor;
-            Controls.Add(title);
-
-            Label sub = new Label();
-            sub.Text = "Paste a direct dated creator giveaway URL. The page will be validated before it is saved.";
-            sub.Left = 25;
-            sub.Top = 59;
-            sub.Width = 550;
-            sub.Height = 34;
-            sub.ForeColor = Muted;
-            Controls.Add(sub);
-
-            Label l1 = MakeLabel("Creator (optional)", 25, 102, 200);
-            creatorBox = MakeTextBox(25, 124, 550);
-            Label l2 = MakeLabel("Direct giveaway URL", 25, 158, 200);
-            urlBox = MakeTextBox(25, 180, 550);
-            urlBox.Text = "https://creator.club/010926/";
-
-            Button cancel = MakeButton("Cancel", 375, 222, 92, false);
-            cancel.DialogResult = DialogResult.Cancel;
-            Button add = MakeButton("Validate + Add", 475, 222, 100, true);
-            add.DialogResult = DialogResult.OK;
-
-            Controls.Add(l1);
-            Controls.Add(creatorBox);
-            Controls.Add(l2);
-            Controls.Add(urlBox);
-            Controls.Add(cancel);
-            Controls.Add(add);
-            AcceptButton = add;
-            CancelButton = cancel;
+            EventHandler apply = delegate { try { SetWindowTheme(control.Handle, "DarkMode_Explorer", null); } catch { } };
+            if (control.IsHandleCreated) apply(control, EventArgs.Empty);
+            control.HandleCreated += apply;
         }
 
-        private Label MakeLabel(string text, int x, int y, int w)
+        public static void DarkTitleBar(IntPtr handle)
         {
-            Label l = new Label();
-            l.Text = text;
-            l.Left = x;
-            l.Top = y;
-            l.Width = w;
-            l.Height = 20;
-            l.ForeColor = Muted;
-            l.Font = new Font("Segoe UI Semibold", 8.5F);
-            return l;
+            try
+            {
+                int on = 1;
+                if (DwmSetWindowAttribute(handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(handle, 19, ref on, 4);
+            }
+            catch { }
         }
 
-        private TextBox MakeTextBox(int x, int y, int w)
-        {
-            TextBox t = new TextBox();
-            t.Left = x;
-            t.Top = y;
-            t.Width = w;
-            t.Height = 28;
-            t.BackColor = Card;
-            t.ForeColor = TextColor;
-            t.BorderStyle = BorderStyle.FixedSingle;
-            return t;
-        }
-
-        private Button MakeButton(string text, int x, int y, int w, bool primary)
-        {
-            Button b = new Button();
-            b.Text = text;
-            b.Left = x;
-            b.Top = y;
-            b.Width = w;
-            b.Height = 36;
-            b.FlatStyle = FlatStyle.Popup;
-            b.UseVisualStyleBackColor = false;
-            b.BackColor = primary ? Accent : Card;
-            b.ForeColor = TextColor;
-            b.Font = new Font("Segoe UI Semibold", 9F);
-            b.FlatAppearance.BorderColor = primary ? Accent : Line;
-            b.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(126, 110, 255) : Color.FromArgb(25, 32, 46);
-            b.FlatAppearance.MouseDownBackColor = primary ? Color.FromArgb(96, 78, 235) : Color.FromArgb(20, 26, 38);
-            return b;
-        }
-    }
-
-    public class DepthButton : Button
-    {
-        public Color TopColor { get; set; }
-        public Color BottomColor { get; set; }
-        public Color BorderColor3D { get; set; }
-        private bool hover;
-        private bool pressed;
-
-        public DepthButton()
-        {
-            TopColor = Color.FromArgb(42, 55, 82);
-            BottomColor = Color.FromArgb(25, 34, 54);
-            BorderColor3D = Color.FromArgb(71, 88, 123);
-            FlatStyle = FlatStyle.Flat;
-            FlatAppearance.BorderSize = 0;
-            UseVisualStyleBackColor = false;
-            Cursor = Cursors.Hand;
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        }
-
-        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hover = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnMouseDown(MouseEventArgs mevent) { if (mevent.Button == MouseButtons.Left) pressed = true; Invalidate(); base.OnMouseDown(mevent); }
-        protected override void OnMouseUp(MouseEventArgs mevent) { pressed = false; Invalidate(); base.OnMouseUp(mevent); }
-        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
-
-        private static Color Blend(Color a, Color b, double amount)
-        {
-            if (amount < 0) amount = 0;
-            if (amount > 1) amount = 1;
-            return Color.FromArgb(
-                (int)Math.Round(a.R * (1.0 - amount) + b.R * amount),
-                (int)Math.Round(a.G * (1.0 - amount) + b.G * amount),
-                (int)Math.Round(a.B * (1.0 - amount) + b.B * amount));
-        }
-
-        private static GraphicsPath RoundedRect(Rectangle r, int radius)
+        public static GraphicsPath RoundPath(Rectangle r, int radius)
         {
             GraphicsPath path = new GraphicsPath();
             int d = Math.Max(2, radius * 2);
+            d = Math.Min(d, Math.Min(r.Width, r.Height));
             path.AddArc(r.Left, r.Top, d, d, 180, 90);
             path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
             path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
@@ -2206,49 +2093,467 @@ namespace SkinClubGiveawayDesktop
             return path;
         }
 
+        public static Color Mix(Color a, Color b, double t)
+        {
+            if (t < 0) t = 0;
+            if (t > 1) t = 1;
+            return Color.FromArgb(
+                (int)Math.Round(a.R * (1.0 - t) + b.R * t),
+                (int)Math.Round(a.G * (1.0 - t) + b.G * t),
+                (int)Math.Round(a.B * (1.0 - t) + b.B * t));
+        }
+
+        public const TextFormatFlags Single = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter;
+    }
+
+    public enum UiButtonKind { Ghost, Primary, Tab }
+
+    // Flat, anti-aliased button used for actions and for the Active / Joined / History / Logs tabs.
+    public class UiButton : Button
+    {
+        private static readonly Font BadgeFont = new Font("Segoe UI Semibold", 8F);
+        private string badge;
+        private bool selected;
+        private bool hover;
+        private bool pressed;
+        public UiButtonKind Kind { get; private set; }
+
+        public UiButton(UiButtonKind kind)
+        {
+            Kind = kind;
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            UseVisualStyleBackColor = false;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Hand;
+            Font = new Font("Segoe UI Semibold", 9.5F);
+            ForeColor = Ui.Text;
+            Height = kind == UiButtonKind.Tab ? 44 : 36;
+            Margin = new Padding(0);
+        }
+
+        public static UiButton Create(string text, UiButtonKind kind, int width)
+        {
+            UiButton b = new UiButton(kind);
+            b.Text = text;
+            if (kind != UiButtonKind.Tab) b.Width = width;
+            return b;
+        }
+
+        public string Badge { get { return badge; } set { badge = value; FitToContent(); Invalidate(); } }
+        public bool Selected { get { return selected; } set { if (selected == value) return; selected = value; Invalidate(); } }
+
+        private int BadgeWidth()
+        {
+            return Math.Max(22, TextRenderer.MeasureText(badge ?? "", BadgeFont, new Size(1000, 40), TextFormatFlags.NoPadding).Width + 12);
+        }
+
+        public void FitToContent()
+        {
+            if (Kind != UiButtonKind.Tab) return;
+            int w = 14 + TextRenderer.MeasureText(Text ?? "", Font, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
+            if (!string.IsNullOrEmpty(badge)) w += 8 + BadgeWidth();
+            Width = w;
+        }
+
+        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); FitToContent(); Invalidate(); }
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) pressed = true; Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent == null ? BackColor : Parent.BackColor);
+            g.Clear(Parent == null ? Ui.Bg : Parent.BackColor);
+            if (Kind == UiButtonKind.Tab) { PaintTab(g); return; }
 
-            Rectangle shadowRect = new Rectangle(2, 5, Math.Max(1, Width - 5), Math.Max(1, Height - 7));
-            using (GraphicsPath shadowPath = RoundedRect(shadowRect, 11))
-            using (SolidBrush shadow = new SolidBrush(Color.FromArgb(35, 0, 0, 0)))
-                g.FillPath(shadow, shadowPath);
-
-            int y = pressed ? 3 : 1;
-            Rectangle face = new Rectangle(1, y, Math.Max(1, Width - 4), Math.Max(1, Height - 7));
-            Color top = TopColor;
-            Color bottom = BottomColor;
-            if (hover && Enabled)
+            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+            Color fill, border, fore;
+            if (Kind == UiButtonKind.Primary)
             {
-                top = Blend(top, Color.White, 0.10);
-                bottom = Blend(bottom, Color.White, 0.05);
+                fill = pressed ? Ui.AccentDark : (hover ? Ui.AccentHover : Ui.Accent);
+                border = fill;
+                fore = Color.White;
+            }
+            else
+            {
+                fill = pressed ? Ui.Surface : (hover ? Ui.Surface3 : Ui.Surface2);
+                border = hover ? Ui.LineStrong : Ui.Line;
+                fore = Ui.Text;
             }
             if (!Enabled)
             {
-                top = Blend(top, Color.FromArgb(80, 84, 94), 0.55);
-                bottom = Blend(bottom, Color.FromArgb(58, 62, 72), 0.55);
+                fill = Ui.Mix(fill, Ui.Bg, 0.55);
+                border = Ui.Mix(border, Ui.Bg, 0.55);
+                fore = Ui.Muted;
             }
-
-            using (GraphicsPath facePath = RoundedRect(face, 11))
-            using (LinearGradientBrush fill = new LinearGradientBrush(face, top, bottom, LinearGradientMode.Vertical))
-            using (Pen border = new Pen(Enabled ? BorderColor3D : Blend(BorderColor3D, Color.Gray, 0.55)))
+            using (GraphicsPath path = Ui.RoundPath(r, 8))
+            using (SolidBrush b = new SolidBrush(fill))
+            using (Pen p = new Pen(border))
             {
-                g.FillPath(fill, facePath);
-                g.DrawPath(border, facePath);
+                g.FillPath(b, path);
+                g.DrawPath(p, path);
             }
-
             if (Focused && ShowFocusCues)
-                ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(face, -5, -5), ForeColor, BottomColor);
+            {
+                using (GraphicsPath ring = Ui.RoundPath(new Rectangle(2, 2, Width - 5, Height - 5), 6))
+                using (Pen p = new Pen(Color.FromArgb(160, Ui.AccentHover)))
+                    g.DrawPath(p, ring);
+            }
+            TextRenderer.DrawText(g, Text, Font, new Rectangle(0, 0, Width, Height), fore,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+        }
 
-            Color text = Enabled ? ForeColor : Color.FromArgb(145, 153, 168);
-            TextRenderer.DrawText(g, Text, Font, face, text,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+        private void PaintTab(Graphics g)
+        {
+            Color fore = selected ? Ui.Text : (hover ? Ui.TextSoft : Ui.Muted);
+            int textWidth = TextRenderer.MeasureText(Text ?? "", Font, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
+            Rectangle textRect = new Rectangle(5, 0, textWidth + 2, Height - 2);
+            TextRenderer.DrawText(g, Text, Font, textRect, fore, Ui.Single);
+            if (!string.IsNullOrEmpty(badge))
+            {
+                int bw = BadgeWidth();
+                Rectangle pill = new Rectangle(textRect.Right + 8, (Height - 2 - 18) / 2, bw, 18);
+                using (GraphicsPath path = Ui.RoundPath(pill, 9))
+                using (SolidBrush b = new SolidBrush(selected ? Color.FromArgb(70, Ui.Accent) : Ui.Surface3))
+                    g.FillPath(b, path);
+                TextRenderer.DrawText(g, badge, BadgeFont, pill, selected ? Ui.AccentHover : Ui.Muted,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            }
+            if (selected)
+                using (SolidBrush b = new SolidBrush(Ui.Accent))
+                    g.FillRectangle(b, 0, Height - 2, Width, 2);
         }
     }
 
+    // Dark text input with a rounded border, focus ring, native placeholder and optional search icon.
+    public class TextField : Panel
+    {
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+
+        private bool focused;
+        private readonly bool searchIcon;
+        private string placeholder = "";
+        private Rectangle clearRect = Rectangle.Empty;
+        public TextBox Input { get; private set; }
+
+        public TextField(bool withSearchIcon)
+        {
+            searchIcon = withSearchIcon;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Height = 36;
+            BackColor = Ui.Bg;
+            Input = new TextBox();
+            Input.BorderStyle = BorderStyle.None;
+            Input.BackColor = Ui.Surface2;
+            Input.ForeColor = Ui.Text;
+            Input.Font = new Font("Segoe UI", 10F);
+            Input.Enter += delegate { focused = true; Invalidate(); };
+            Input.Leave += delegate { focused = false; Invalidate(); };
+            Input.TextChanged += delegate { Invalidate(); };
+            Input.HandleCreated += delegate { ApplyPlaceholder(); };
+            Controls.Add(Input);
+            Cursor = Cursors.IBeam;
+        }
+
+        public string Placeholder { get { return placeholder; } set { placeholder = value ?? ""; ApplyPlaceholder(); } }
+
+        private void ApplyPlaceholder()
+        {
+            if (Input.IsHandleCreated) SendMessage(Input.Handle, 0x1501, new IntPtr(1), placeholder);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (Input == null) return;
+            int left = searchIcon ? 38 : 14;
+            int right = 34;
+            Input.Left = left;
+            Input.Width = Math.Max(10, Width - left - right);
+            Input.Top = Math.Max(0, (Height - Input.Height) / 2);
+            clearRect = new Rectangle(Width - 30, (Height - 22) / 2, 22, 22);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (Input.TextLength > 0 && clearRect.Contains(e.Location)) { Input.Clear(); Input.Focus(); return; }
+            Input.Focus();
+            base.OnMouseDown(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Parent == null ? Ui.Bg : Parent.BackColor);
+            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath path = Ui.RoundPath(r, 8))
+            using (SolidBrush b = new SolidBrush(Ui.Surface2))
+            using (Pen p = new Pen(focused ? Ui.Accent : Ui.Line, focused ? 1.5F : 1F))
+            {
+                g.FillPath(b, path);
+                g.DrawPath(p, path);
+            }
+            Color icon = focused ? Ui.AccentHover : Ui.Muted;
+            if (searchIcon)
+            {
+                int cy = Height / 2;
+                using (Pen p = new Pen(icon, 1.7F))
+                {
+                    p.StartCap = LineCap.Round;
+                    p.EndCap = LineCap.Round;
+                    g.DrawEllipse(p, 14, cy - 7, 9, 9);
+                    g.DrawLine(p, 21, cy + 1, 25, cy + 5);
+                }
+            }
+            if (Input.TextLength > 0)
+            {
+                using (SolidBrush b = new SolidBrush(Ui.Surface3))
+                    g.FillEllipse(b, clearRect.X + 2, clearRect.Y + 2, 18, 18);
+                using (Pen p = new Pen(Ui.TextSoft, 1.5F))
+                {
+                    p.StartCap = LineCap.Round;
+                    p.EndCap = LineCap.Round;
+                    g.DrawLine(p, clearRect.X + 8, clearRect.Y + 8, clearRect.X + 14, clearRect.Y + 14);
+                    g.DrawLine(p, clearRect.X + 14, clearRect.Y + 8, clearRect.X + 8, clearRect.Y + 14);
+                }
+            }
+        }
+    }
+
+    internal class DarkMenuColors : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground { get { return Ui.Surface2; } }
+        public override Color ImageMarginGradientBegin { get { return Ui.Surface2; } }
+        public override Color ImageMarginGradientMiddle { get { return Ui.Surface2; } }
+        public override Color ImageMarginGradientEnd { get { return Ui.Surface2; } }
+        public override Color MenuBorder { get { return Ui.LineStrong; } }
+        public override Color MenuItemBorder { get { return Ui.Surface3; } }
+        public override Color MenuItemSelected { get { return Ui.Surface3; } }
+        public override Color MenuItemSelectedGradientBegin { get { return Ui.Surface3; } }
+        public override Color MenuItemSelectedGradientEnd { get { return Ui.Surface3; } }
+        public override Color MenuItemPressedGradientBegin { get { return Ui.Surface3; } }
+        public override Color MenuItemPressedGradientEnd { get { return Ui.Surface3; } }
+    }
+
+    // Replaces the white system combo box: shows the current value and opens a dark menu.
+    public class UiPicker : Control
+    {
+        private bool hover;
+        private int selectedIndex = -1;
+        private readonly List<object> items = new List<object>();
+        public event EventHandler SelectedIndexChanged;
+
+        public UiPicker()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Hand;
+            Height = 36;
+            Font = new Font("Segoe UI", 9.5F);
+            TabStop = true;
+        }
+
+        public List<object> Items { get { return items; } }
+        public object SelectedItem { get { return selectedIndex >= 0 && selectedIndex < items.Count ? items[selectedIndex] : null; } }
+        public int SelectedIndex
+        {
+            get { return selectedIndex; }
+            set
+            {
+                if (value == selectedIndex) return;
+                selectedIndex = value;
+                Invalidate();
+                if (SelectedIndexChanged != null) SelectedIndexChanged(this, EventArgs.Empty);
+            }
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space || e.KeyCode == Keys.Down) { ShowMenu(); e.Handled = true; }
+            base.OnKeyDown(e);
+        }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) ShowMenu(); base.OnMouseDown(e); }
+
+        private void ShowMenu()
+        {
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors());
+            menu.BackColor = Ui.Surface2;
+            menu.ForeColor = Ui.Text;
+            menu.Font = Font;
+            menu.ShowImageMargin = false;
+            menu.Padding = new Padding(4);
+            for (int i = 0; i < items.Count; i++)
+            {
+                int index = i;
+                ToolStripMenuItem item = new ToolStripMenuItem(items[i].ToString());
+                item.ForeColor = i == selectedIndex ? Ui.AccentHover : Ui.Text;
+                item.Padding = new Padding(6, 5, 6, 5);
+                item.Click += delegate { SelectedIndex = index; };
+                menu.Items.Add(item);
+            }
+            menu.Closed += delegate { menu.Dispose(); };
+            menu.Show(this, new Point(0, Height + 4));
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Parent == null ? Ui.Bg : Parent.BackColor);
+            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath path = Ui.RoundPath(r, 8))
+            using (SolidBrush b = new SolidBrush(hover ? Ui.Surface3 : Ui.Surface2))
+            using (Pen p = new Pen(hover || Focused ? Ui.LineStrong : Ui.Line))
+            {
+                g.FillPath(b, path);
+                g.DrawPath(p, path);
+            }
+            object current = SelectedItem;
+            TextRenderer.DrawText(g, current == null ? "" : current.ToString(), Font, new Rectangle(12, 0, Width - 34, Height), Ui.TextSoft, Ui.Single);
+            using (Pen p = new Pen(Ui.Muted, 1.6F))
+            {
+                p.StartCap = LineCap.Round;
+                p.EndCap = LineCap.Round;
+                int cx = Width - 16, cy = Height / 2;
+                g.DrawLine(p, cx - 4, cy - 2, cx, cy + 2);
+                g.DrawLine(p, cx, cy + 2, cx + 4, cy - 2);
+            }
+        }
+    }
+
+    // Thin progress strip shown above the table while a scan is running.
+    public class ScanStrip : Control
+    {
+        private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+        private double position;
+        private bool active;
+
+        public ScanStrip()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            Height = 2;
+            timer.Interval = 30;
+            timer.Tick += delegate { position += 0.018; if (position > 1.0) position = 0; Invalidate(); };
+        }
+
+        public bool Active
+        {
+            get { return active; }
+            set
+            {
+                active = value;
+                if (value) timer.Start(); else timer.Stop();
+                position = 0;
+                Invalidate();
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) timer.Dispose();
+            base.Dispose(disposing);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Ui.Line);
+            if (!active) return;
+            int w = Math.Max(40, Width / 4);
+            int x = (int)((Width + w) * position) - w;
+            using (LinearGradientBrush b = new LinearGradientBrush(new Rectangle(x - 1, 0, w + 2, Math.Max(1, Height)),
+                Color.FromArgb(0, Ui.Accent), Ui.AccentHover, LinearGradientMode.Horizontal))
+                e.Graphics.FillRectangle(b, x, 0, w, Height);
+        }
+    }
+
+    public class AddLinkForm : Form
+    {
+        public string CreatorName { get { return creatorField.Input.Text.Trim(); } }
+        public string GiveawayUrl { get { return urlField.Input.Text.Trim(); } }
+        private readonly TextField creatorField;
+        private readonly TextField urlField;
+
+        public AddLinkForm()
+        {
+            Text = "Add giveaway";
+            ClientSize = new Size(560, 330);
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Ui.Surface;
+            ForeColor = Ui.Text;
+            Font = new Font("Segoe UI", 9F);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            Label title = new Label();
+            title.Text = "Add a giveaway";
+            title.SetBounds(28, 24, 504, 32);
+            title.Font = new Font("Segoe UI Semibold", 15F);
+            title.ForeColor = Ui.Text;
+            Controls.Add(title);
+
+            Label sub = new Label();
+            sub.Text = "Paste a direct, dated creator giveaway link. The page is checked before it is saved.";
+            sub.SetBounds(28, 60, 504, 22);
+            sub.ForeColor = Ui.Muted;
+            Controls.Add(sub);
+
+            Controls.Add(MakeLabel("CREATOR  (OPTIONAL)", 108));
+            creatorField = new TextField(false);
+            creatorField.BackColor = Ui.Surface;
+            creatorField.SetBounds(28, 130, 504, 38);
+            creatorField.Placeholder = "e.g. Jon Sandman";
+            Controls.Add(creatorField);
+
+            Controls.Add(MakeLabel("GIVEAWAY LINK", 184));
+            urlField = new TextField(false);
+            urlField.BackColor = Ui.Surface;
+            urlField.SetBounds(28, 206, 504, 38);
+            urlField.Placeholder = "https://creator.club/010926/";
+            Controls.Add(urlField);
+
+            UiButton cancel = UiButton.Create("Cancel", UiButtonKind.Ghost, 96);
+            cancel.Location = new Point(28 + 504 - 96 - 12 - 140, 274);
+            cancel.DialogResult = DialogResult.Cancel;
+            UiButton add = UiButton.Create("Validate and add", UiButtonKind.Primary, 140);
+            add.Location = new Point(28 + 504 - 140, 274);
+            add.DialogResult = DialogResult.OK;
+            cancel.BackColor = add.BackColor = Ui.Surface;
+            Controls.Add(cancel);
+            Controls.Add(add);
+            AcceptButton = add;
+            CancelButton = cancel;
+            Shown += delegate { urlField.Input.Focus(); };
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            Ui.DarkTitleBar(Handle);
+        }
+
+        private static Label MakeLabel(string text, int y)
+        {
+            Label l = new Label();
+            l.Text = text;
+            l.SetBounds(28, y, 504, 18);
+            l.ForeColor = Ui.Muted;
+            l.Font = new Font("Segoe UI Semibold", 8F);
+            return l;
+        }
+    }
     public class CopyToastControl : Control
     {
         private readonly System.Windows.Forms.Timer animationTimer;
@@ -2468,13 +2773,8 @@ namespace SkinClubGiveawayDesktop
         private Label viewSubtitle;
         private Label scanStatus;
         private TextBox filterBox;
-        private ComboBox filterFieldBox;
-        private TableLayoutPanel cardPanelRef;
-        private TableLayoutPanel cardHeaderPanel;
-        private TableLayoutPanel titlePanelRef;
+        private UiPicker filterFieldBox;
         private TableLayoutPanel filterPanelRef;
-        private Panel activityBarRef;
-        private Panel viewAccentRef;
         private bool showingHistory = false;
         private bool showingJoined = false;
         private bool scanning = false;
@@ -2487,28 +2787,23 @@ namespace SkinClubGiveawayDesktop
         private bool sortAscending = true;
 
         // Restrained product-dashboard palette: neutral ink surfaces with precise accent usage.
-        private readonly Color Bg = Color.FromArgb(9, 14, 25);
-        private readonly Color Surface = Color.FromArgb(17, 24, 39);
-        private readonly Color Surface2 = Color.FromArgb(13, 20, 34);
-        private readonly Color Surface3 = Color.FromArgb(27, 37, 56);
-        private readonly Color Line = Color.FromArgb(43, 55, 78);
-        private readonly Color TextColor = Color.FromArgb(244, 247, 252);
-        private readonly Color Muted = Color.FromArgb(145, 158, 181);
-        private readonly Color Accent = Color.FromArgb(112, 104, 255);
+        private readonly Color Bg = Ui.Bg;
+        private readonly Color Surface = Ui.Surface;
+        private readonly Color Surface2 = Ui.Surface2;
+        private readonly Color Surface3 = Ui.Surface3;
+        private readonly Color Line = Ui.Line;
+        private readonly Color TextColor = Ui.Text;
+        private readonly Color Muted = Ui.Muted;
+        private readonly Color Accent = Ui.Accent;
         private readonly Color Accent2 = Color.FromArgb(56, 189, 248);
-        private readonly Color Success = Color.FromArgb(45, 212, 191);
-        private readonly Color Warning = Color.FromArgb(251, 191, 36);
-        private readonly Color Danger = Color.FromArgb(251, 113, 133);
+        private readonly Color Success = Ui.Success;
+        private readonly Color Warning = Ui.Warning;
+        private readonly Color Danger = Ui.Danger;
         private readonly Color PriorityGreen = Color.FromArgb(74, 222, 128);
         private readonly Color PriorityYellow = Color.FromArgb(250, 204, 21);
         private readonly Color PriorityRed = Color.FromArgb(248, 113, 113);
-        private readonly Color ActiveView = Color.FromArgb(45, 212, 191);
-        private readonly Color HistoryView = Color.FromArgb(245, 158, 11);
-        private readonly Color JoinedView = Color.FromArgb(167, 139, 250);
-        private readonly Color ButtonTop = Color.FromArgb(43, 55, 82);
-        private readonly Color ButtonBottom = Color.FromArgb(24, 33, 52);
-        private readonly Color ButtonBorder = Color.FromArgb(66, 82, 112);
-
+        private readonly Color RowHover = Color.FromArgb(21, 28, 41);
+        private readonly Color RowSelected = Color.FromArgb(26, 34, 52);
         public MainForm()
             : this(null, true)
         {
@@ -2519,7 +2814,7 @@ namespace SkinClubGiveawayDesktop
             Text = Program.DisplayTitle;
             Width = 1240;
             Height = 800;
-            MinimumSize = new Size(1040, 680);
+            MinimumSize = new Size(1100, 700);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Bg;
             ForeColor = TextColor;
@@ -2563,6 +2858,12 @@ namespace SkinClubGiveawayDesktop
             autoTimer.Interval = 10 * 60 * 1000;
             autoTimer.Tick += async delegate { if (!scanning) await RefreshAsync(false); };
             if (automaticRefresh) autoTimer.Start();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            Ui.DarkTitleBar(Handle);
         }
 
         protected override void Dispose(bool disposing)
@@ -2618,6 +2919,18 @@ namespace SkinClubGiveawayDesktop
             update(control, EventArgs.Empty);
         }
 
+        private readonly Font cellFont = new Font("Segoe UI", 9.5F);
+        private readonly Font cellBold = new Font("Segoe UI Semibold", 9.5F);
+        private readonly Font monoFont = new Font("Consolas", 9.5F);
+        private readonly Font smallFont = new Font("Segoe UI", 8.5F);
+        private readonly Font headerFont = new Font("Segoe UI Semibold", 8F);
+        private ScanStrip scanStrip;
+        private Panel statusDot;
+        private Color statusDotColor = Ui.Success;
+        private int hoverRow = -1;
+        private int hoverColumn = -1;
+        private bool hoverOnCopy;
+
         private void BuildUi()
         {
             SuspendLayout();
@@ -2625,314 +2938,150 @@ namespace SkinClubGiveawayDesktop
             TableLayoutPanel root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.BackColor = Bg;
-            root.Padding = new Padding(22, 18, 22, 22);
+            root.Padding = new Padding(28, 18, 28, 0);
             root.ColumnCount = 1;
-            root.RowCount = 4;
+            root.RowCount = 5;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
             Controls.Add(root);
 
-            // Brand header
+            // ---- Header: brand on the left, primary actions on the right ----
             TableLayoutPanel header = new TableLayoutPanel();
             header.Dock = DockStyle.Fill;
-            header.Margin = new Padding(0, 0, 0, 12);
-            header.BackColor = Color.FromArgb(14, 21, 36);
+            header.Margin = new Padding(0);
+            header.BackColor = Bg;
             header.ColumnCount = 2;
             header.RowCount = 1;
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 350F));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             header.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(header, 0, 0);
-            RoundControl(header, 16);
 
-            Panel brand = new Panel();
+            FlowLayoutPanel brand = new FlowLayoutPanel();
             brand.Dock = DockStyle.Fill;
-            brand.BackColor = Color.FromArgb(14, 21, 36);
-            brand.Padding = new Padding(18, 15, 8, 12);
+            brand.Margin = new Padding(0);
+            brand.WrapContents = false;
+            brand.FlowDirection = FlowDirection.LeftToRight;
+            brand.BackColor = Bg;
             header.Controls.Add(brand, 0, 0);
 
             PictureBox logo = new PictureBox();
-            logo.Left = 18;
-            logo.Top = 17;
-            logo.Width = 54;
-            logo.Height = 54;
+            logo.Size = new Size(36, 36);
+            logo.Margin = new Padding(0, 8, 12, 0);
             logo.SizeMode = PictureBoxSizeMode.Zoom;
             try { logo.Image = Icon.ExtractAssociatedIcon(Application.ExecutablePath).ToBitmap(); } catch { }
             brand.Controls.Add(logo);
 
             Label title = new Label();
-            title.Text = Program.DisplayTitle;
-            title.Left = 86;
-            title.Top = 17;
-            title.Width = 470;
-            title.Height = 34;
-            title.Font = new Font("Segoe UI Semibold", 16F);
-            title.AutoEllipsis = true;
+            title.Text = "SkinClub GW Finder";
+            title.AutoSize = true;
+            title.Margin = new Padding(0, 10, 0, 0);
+            title.Font = new Font("Segoe UI Semibold", 15F);
             title.ForeColor = TextColor;
             brand.Controls.Add(title);
 
-            Label sub = new Label();
-            sub.Text = "Discover. Track. Stay in the game.";
-            sub.Left = 88;
-            sub.Top = 56;
-            sub.Width = 520;
-            sub.Height = 24;
-            sub.ForeColor = Muted;
-            sub.Font = new Font("Segoe UI", 9F);
-            brand.Controls.Add(sub);
-            sub.AutoEllipsis = true;
-            brand.Resize += delegate
-            {
-                title.Width = Math.Max(1, brand.ClientSize.Width - title.Left - 12);
-                sub.Width = Math.Max(1, brand.ClientSize.Width - sub.Left - 12);
-            };
-
-            Panel brandAccent = new Panel();
-            brandAccent.Dock = DockStyle.Left;
-            brandAccent.Width = 4;
-            brandAccent.BackColor = Accent;
-            brandAccent.Dispose();
-
+            Label version = new Label();
+            version.Text = "v" + typeof(Program).Assembly.GetName().Version.ToString(3);
+            version.AutoSize = true;
+            version.Margin = new Padding(10, 17, 0, 0);
+            version.Font = new Font("Segoe UI", 9F);
+            version.ForeColor = Muted;
+            brand.Controls.Add(version);
 
             FlowLayoutPanel actions = new FlowLayoutPanel();
-            actions.Dock = DockStyle.Fill;
-            actions.Padding = new Padding(8, 26, 16, 0);
-            actions.FlowDirection = FlowDirection.RightToLeft;
+            actions.AutoSize = true;
+            actions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            actions.Anchor = AnchorStyles.Right;
+            actions.Margin = new Padding(0);
             actions.WrapContents = false;
-            actions.BackColor = Color.FromArgb(14, 21, 36);
+            actions.FlowDirection = FlowDirection.LeftToRight;
+            actions.BackColor = Bg;
             header.Controls.Add(actions, 1, 0);
 
-            deepButton = MakeHeaderButton("Deep Search", 116, true);
-            refreshButton = MakeHeaderButton("Refresh", 84, false);
-            historyButton = MakeHeaderButton("History", 84, false);
-            joinedButton = MakeHeaderButton("Joined", 82, false);
-            addButton = MakeHeaderButton("+ Add link", 92, false);
-            actions.Controls.Add(deepButton);
-            actions.Controls.Add(refreshButton);
-
-
+            addButton = MakeHeaderButton("Add link", 96, false);
+            refreshButton = MakeHeaderButton("Refresh", 92, false);
+            deepButton = MakeHeaderButton("Deep Search", 124, true);
+            addButton.Margin = refreshButton.Margin = deepButton.Margin = new Padding(10, 0, 0, 0);
             actions.Controls.Add(addButton);
-
+            actions.Controls.Add(refreshButton);
+            actions.Controls.Add(deepButton);
             addButton.Click += async delegate { await AddLinkAsync(); };
-            historyButton.Click += delegate
-            {
-                showingHistory = true; showingJoined = false; showingLogs = false;
-
-                Render();
-            };
-            joinedButton.Click += delegate
-            {
-                showingJoined = true; showingHistory = false; showingLogs = false;
-
-                Render();
-            };
             refreshButton.Click += async delegate { await RefreshAsync(true); };
             deepButton.Click += async delegate { await DeepSearchAsync(); };
 
-            // Status / stats row
-            TableLayoutPanel toolbar = new TableLayoutPanel();
-            toolbar.Dock = DockStyle.Fill;
-            toolbar.Margin = new Padding(0, 0, 0, 12);
-            toolbar.BackColor = Bg;
-            toolbar.ColumnCount = 1;
-            toolbar.RowCount = 1;
-            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.Controls.Add(toolbar, 0, 1);
+            // ---- Navigation: tabs on the left, search on the right ----
+            TableLayoutPanel nav = new TableLayoutPanel();
+            nav.Dock = DockStyle.Fill;
+            nav.Margin = new Padding(0);
+            nav.BackColor = Bg;
+            nav.ColumnCount = 2;
+            nav.RowCount = 1;
+            nav.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            nav.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 470F));
+            nav.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            nav.Paint += delegate(object s, PaintEventArgs pe)
+            {
+                using (Pen p = new Pen(Line))
+                    pe.Graphics.DrawLine(p, 0, nav.Height - 1, nav.Width, nav.Height - 1);
+            };
+            root.Controls.Add(nav, 0, 1);
 
-            FlowLayoutPanel stats = new FlowLayoutPanel();
-            stats.Dock = DockStyle.Fill;
-            stats.FlowDirection = FlowDirection.LeftToRight;
-            stats.WrapContents = false;
-            stats.BackColor = Bg;
-            toolbar.Controls.Add(stats, 0, 0);
+            FlowLayoutPanel tabs = new FlowLayoutPanel();
+            tabs.Dock = DockStyle.Fill;
+            tabs.Margin = new Padding(0);
+            tabs.WrapContents = false;
+            tabs.FlowDirection = FlowDirection.LeftToRight;
+            tabs.BackColor = Bg;
+            nav.Controls.Add(tabs, 0, 0);
 
-            lastCheck = MakeStatLabel("LAST CHECK  NEVER", 222, Accent2);
-            activeButton = MakeHeaderButton("Active", 140, false);
+            activeButton = MakeTab("Active");
+            joinedButton = MakeTab("Joined");
+            historyButton = MakeTab("History");
+            logsButton = MakeTab("Logs");
+            tabs.Controls.Add(activeButton);
+            tabs.Controls.Add(joinedButton);
+            tabs.Controls.Add(historyButton);
+            tabs.Controls.Add(logsButton);
             activeButton.Click += delegate { showingHistory = false; showingJoined = false; showingLogs = false; Render(); };
-            activeButton.Margin = new Padding(0, 5, 8, 0);
-            joinedButton.Width = historyButton.Width = 140;
-            joinedButton.Margin = historyButton.Margin = new Padding(0, 5, 8, 0);
-            stats.Controls.Add(activeButton);
-            stats.Controls.Add(joinedButton);
-            stats.Controls.Add(historyButton);
-            logsButton = MakeHeaderButton("Logs", 100, false);
-            logsButton.Margin = new Padding(0, 5, 8, 0);
+            joinedButton.Click += delegate { showingJoined = true; showingHistory = false; showingLogs = false; Render(); };
+            historyButton.Click += delegate { showingHistory = true; showingJoined = false; showingLogs = false; Render(); };
             logsButton.Click += delegate { showingLogs = true; showingHistory = false; showingJoined = false; Render(); };
-            stats.Controls.Add(logsButton);
-            lastCheck.Width = 300;
-            lastCheck.BackColor = Bg;
-            lastCheck.ForeColor = Muted;
-            lastCheck.TextAlign = ContentAlignment.MiddleLeft;
 
-
-            stats.Controls.Add(lastCheck);
-
-            // Dedicated activity/search-status row. Keeping this outside the table/card
-            // prevents DPI scaling or docking from clipping long search messages.
-            Panel activityBar = new Panel();
-            activityBarRef = activityBar;
-            activityBar.Dock = DockStyle.Fill;
-            activityBar.Margin = new Padding(0, 0, 0, 8);
-            activityBar.Padding = new Padding(12, 0, 12, 0);
-            activityBar.BackColor = Color.FromArgb(12, 19, 32);
-            root.Controls.Add(activityBar, 0, 2);
-            RoundControl(activityBar, 10);
-
-            scanStatus = new Label();
-            scanStatus.Dock = DockStyle.Fill;
-            scanStatus.ForeColor = Warning;
-            scanStatus.Font = new Font("Segoe UI Semibold", 9F);
-            scanStatus.TextAlign = ContentAlignment.MiddleLeft;
-            scanStatus.AutoEllipsis = true;
-            scanStatus.Text = "Ready";
-            activityBar.Controls.Add(scanStatus);
-
-            // Main card
-            TableLayoutPanel card = new TableLayoutPanel();
-            cardPanelRef = card;
-            card.Dock = DockStyle.Fill;
-            card.Margin = new Padding(0);
-            card.Padding = new Padding(1);
-            card.BackColor = Line;
-            card.ColumnCount = 1;
-            card.RowCount = 3;
-            card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            // Give the section header enough room at common Windows DPI scales.
-            // The labels inside it use a layout panel below instead of absolute Y positions,
-            // so helper text can never slide underneath the grid.
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 68F));
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 3F));
-            card.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            root.Controls.Add(card, 0, 3);
-            RoundControl(card, 14);
-
-            TableLayoutPanel cardHeader = new TableLayoutPanel();
-            cardHeaderPanel = cardHeader;
-            cardHeader.Dock = DockStyle.Fill;
-            cardHeader.BackColor = Surface;
-            cardHeader.ColumnCount = 2;
-            cardHeader.RowCount = 1;
-            cardHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            cardHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 430F));
-            card.Controls.Add(cardHeader, 0, 0);
-
-            TableLayoutPanel titlePanel = new TableLayoutPanel();
-            titlePanelRef = titlePanel;
-            titlePanel.Dock = DockStyle.Fill;
-            titlePanel.Margin = new Padding(0);
-            titlePanel.Padding = new Padding(16, 7, 8, 6);
-            titlePanel.BackColor = Surface;
-            titlePanel.ColumnCount = 1;
-            titlePanel.RowCount = 2;
-            titlePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            titlePanel.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
-            titlePanel.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
-            cardHeader.Controls.Add(titlePanel, 0, 0);
-
-            viewTitle = new Label();
-            viewTitle.Text = "Active giveaways";
-            viewTitle.Dock = DockStyle.Fill;
-            viewTitle.Margin = new Padding(0);
-            viewTitle.Font = new Font("Segoe UI Semibold", 11.5F);
-            viewTitle.ForeColor = TextColor;
-            viewTitle.TextAlign = ContentAlignment.MiddleLeft;
-            viewTitle.AutoEllipsis = true;
-            titlePanel.Controls.Add(viewTitle, 0, 0);
-
-            viewSubtitle = new Label();
-            viewSubtitle.Text = "Click a column header to sort";
-            viewSubtitle.Dock = DockStyle.Fill;
-            viewSubtitle.Margin = new Padding(0);
-            viewSubtitle.ForeColor = Muted;
-            viewSubtitle.Font = new Font("Segoe UI", 8.5F);
-            viewSubtitle.TextAlign = ContentAlignment.MiddleLeft;
-            viewSubtitle.AutoEllipsis = true;
-            titlePanel.Controls.Add(viewSubtitle, 0, 1);
+            Panel navTools = new Panel();
+            navTools.Dock = DockStyle.Fill;
+            navTools.Margin = new Padding(0);
+            navTools.BackColor = Bg;
+            nav.Controls.Add(navTools, 1, 0);
 
             TableLayoutPanel filterPanel = new TableLayoutPanel();
             filterPanelRef = filterPanel;
             filterPanel.Dock = DockStyle.Fill;
-            filterPanel.Margin = new Padding(0);
-            filterPanel.Padding = new Padding(8, 15, 16, 14);
-            filterPanel.BackColor = Surface;
-            filterPanel.ColumnCount = 3;
+            filterPanel.Padding = new Padding(0, 6, 0, 8);
+            filterPanel.BackColor = Bg;
+            filterPanel.ColumnCount = 2;
             filterPanel.RowCount = 1;
             filterPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60F));
-            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145F));
+            filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 142F));
             filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            Panel headerTools = new Panel();
-            headerTools.Dock = DockStyle.Fill;
-            headerTools.Margin = new Padding(0);
-            headerTools.Controls.Add(filterPanel);
-            cardHeader.Controls.Add(headerTools, 1, 0);
-            logActions = new FlowLayoutPanel();
-            logActions.Dock = DockStyle.Fill;
-            logActions.FlowDirection = FlowDirection.RightToLeft;
-            logActions.Padding = new Padding(8, 12, 12, 0);
-            Button copyLogs = MakeHeaderButton("Copy logs", 100, false);
-            copyLogs.Click += delegate
-            {
-                try { if (logText.TextLength > 0) Clipboard.SetText(logText.Text); }
-                catch { scanStatus.Text = "Clipboard is busy - try again"; }
-            };
-            Button clearLogs = MakeHeaderButton("Clear", 80, false);
-            clearLogs.Click += delegate { ActivityLog.Clear(); UpdateLogs(); };
-            logActions.Controls.Add(copyLogs);
-            logActions.Controls.Add(clearLogs);
-            headerTools.Controls.Add(logActions);
+            navTools.Controls.Add(filterPanel);
 
-            Panel viewAccent = new Panel();
-            viewAccentRef = viewAccent;
-            viewAccent.Dock = DockStyle.Fill;
-            viewAccent.Margin = new Padding(0);
-            viewAccent.BackColor = ActiveView;
-            card.Controls.Add(viewAccent, 0, 1);
-
-
-            Label filterLabel = new Label();
-            filterLabel.Text = "SEARCH";
-            filterLabel.Dock = DockStyle.Fill;
-            filterLabel.Margin = new Padding(0);
-            filterLabel.ForeColor = Muted;
-            filterLabel.Font = new Font("Segoe UI Semibold", 8F);
-            filterLabel.TextAlign = ContentAlignment.MiddleLeft;
-            filterPanel.Controls.Add(filterLabel, 0, 0);
-
-            filterFieldBox = new ComboBox();
+            filterFieldBox = new UiPicker();
             filterFieldBox.Dock = DockStyle.Fill;
-            filterFieldBox.Margin = new Padding(0, 1, 8, 1);
-            filterFieldBox.DropDownStyle = ComboBoxStyle.DropDownList;
-            filterFieldBox.FlatStyle = FlatStyle.Flat;
-            filterFieldBox.DrawMode = DrawMode.OwnerDrawFixed;
-            filterFieldBox.DrawItem += delegate(object sender, DrawItemEventArgs e)
-            {
-                if (e.Index < 0) return;
-                using (SolidBrush background = new SolidBrush((e.State & DrawItemState.Selected) != 0 ? Surface3 : Surface))
-                    e.Graphics.FillRectangle(background, e.Bounds);
-                TextRenderer.DrawText(e.Graphics, filterFieldBox.Items[e.Index].ToString(), filterFieldBox.Font,
-                    e.Bounds, TextColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-                e.DrawFocusRectangle();
-            };
-            filterFieldBox.BackColor = Surface3;
-            filterFieldBox.ForeColor = TextColor;
-            filterFieldBox.Font = new Font("Segoe UI", 8.7F);
+            filterFieldBox.Margin = new Padding(0, 0, 8, 0);
             filterFieldBox.Items.AddRange(new object[] { "Creator name", "All fields", "URL", "Ticket", "Promocode", "Minimum deposit", "Deadline" });
             filterFieldBox.SelectedIndex = 0;
             filterFieldBox.SelectedIndexChanged += delegate { if (grid != null) Render(); };
-            filterPanel.Controls.Add(filterFieldBox, 1, 0);
+            filterPanel.Controls.Add(filterFieldBox, 0, 0);
 
-            filterBox = new TextBox();
-            filterBox.Dock = DockStyle.Fill;
-            filterBox.Margin = new Padding(0, 2, 0, 2);
-            filterBox.BorderStyle = BorderStyle.FixedSingle;
-            filterBox.BackColor = Surface3;
-            filterBox.ForeColor = TextColor;
-            filterBox.Font = new Font("Segoe UI", 9F);
+            TextField searchField = new TextField(true);
+            searchField.Dock = DockStyle.Fill;
+            searchField.Margin = new Padding(0);
+            searchField.Placeholder = "Search giveaways   (Ctrl+F)";
+            filterBox = searchField.Input;
             filterBox.AccessibleName = "Search giveaways";
             filterBox.TextChanged += delegate { filterTimer.Stop(); filterTimer.Start(); };
             filterBox.KeyDown += delegate(object sender, KeyEventArgs e)
@@ -2943,19 +3092,95 @@ namespace SkinClubGiveawayDesktop
                     e.SuppressKeyPress = true;
                 }
             };
-            filterPanel.Controls.Add(filterBox, 2, 0);
+            filterPanel.Controls.Add(searchField, 1, 0);
+
+            logActions = new FlowLayoutPanel();
+            logActions.Dock = DockStyle.Fill;
+            logActions.FlowDirection = FlowDirection.RightToLeft;
+            logActions.Padding = new Padding(0, 8, 0, 0);
+            logActions.BackColor = Bg;
+            logActions.Visible = false;
+            Button copyLogs = MakeHeaderButton("Copy logs", 100, false);
+            copyLogs.Margin = new Padding(10, 0, 0, 0);
+            copyLogs.Click += delegate
+            {
+                try { if (logText.TextLength > 0) Clipboard.SetText(logText.Text); }
+                catch { scanStatus.Text = "Clipboard is busy - try again"; }
+            };
+            Button clearLogs = MakeHeaderButton("Clear", 80, false);
+            clearLogs.Margin = new Padding(10, 0, 0, 0);
+            clearLogs.Click += delegate { ActivityLog.Clear(); UpdateLogs(); };
+            logActions.Controls.Add(clearLogs);
+            logActions.Controls.Add(copyLogs);
+            navTools.Controls.Add(logActions);
+
+            // ---- Context line: what this view shows ----
+            TableLayoutPanel context = new TableLayoutPanel();
+            context.Dock = DockStyle.Fill;
+            context.Margin = new Padding(0);
+            context.BackColor = Bg;
+            context.ColumnCount = 2;
+            context.RowCount = 1;
+            context.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            context.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            context.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.Controls.Add(context, 0, 2);
+
+            viewTitle = new Label();
+            viewTitle.Text = "Active giveaways";
+            viewTitle.AutoSize = true;
+            viewTitle.Anchor = AnchorStyles.Left;
+            viewTitle.Margin = new Padding(0, 0, 12, 0);
+            viewTitle.Font = new Font("Segoe UI Semibold", 12F);
+            viewTitle.ForeColor = TextColor;
+            context.Controls.Add(viewTitle, 0, 0);
+
+            viewSubtitle = new Label();
+            viewSubtitle.Text = "";
+            viewSubtitle.Dock = DockStyle.Fill;
+            viewSubtitle.Margin = new Padding(0);
+            viewSubtitle.ForeColor = Muted;
+            viewSubtitle.Font = new Font("Segoe UI", 9F);
+            viewSubtitle.TextAlign = ContentAlignment.MiddleLeft;
+            viewSubtitle.AutoEllipsis = true;
+            context.Controls.Add(viewSubtitle, 1, 0);
+
+            // ---- Card holding the table / logs ----
+            Panel card = new Panel();
+            card.Dock = DockStyle.Fill;
+            card.Margin = new Padding(0);
+            card.Padding = new Padding(1);
+            card.BackColor = Line;
+            root.Controls.Add(card, 0, 3);
+
+            TableLayoutPanel cardInner = new TableLayoutPanel();
+            cardInner.Dock = DockStyle.Fill;
+            cardInner.Margin = new Padding(0);
+            cardInner.BackColor = Surface;
+            cardInner.ColumnCount = 1;
+            cardInner.RowCount = 2;
+            cardInner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            cardInner.RowStyles.Add(new RowStyle(SizeType.Absolute, 2F));
+            cardInner.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            card.Controls.Add(cardInner);
+
+            scanStrip = new ScanStrip();
+            scanStrip.Dock = DockStyle.Fill;
+            scanStrip.Margin = new Padding(0);
+            cardInner.Controls.Add(scanStrip, 0, 0);
 
             grid = new BufferedGrid();
             grid.Dock = DockStyle.Fill;
             grid.Margin = new Padding(0);
-            grid.BackgroundColor = Surface2;
+            grid.BackgroundColor = Surface;
             grid.BorderStyle = BorderStyle.None;
-            grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+            grid.CellBorderStyle = DataGridViewCellBorderStyle.None;
             grid.GridColor = Line;
             grid.RowHeadersVisible = false;
             grid.AllowUserToAddRows = false;
             grid.AllowUserToDeleteRows = false;
             grid.AllowUserToResizeRows = false;
+            grid.AllowUserToResizeColumns = false;
             grid.AllowUserToOrderColumns = false;
             grid.MultiSelect = false;
             grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
@@ -2964,115 +3189,157 @@ namespace SkinClubGiveawayDesktop
             grid.ColumnHeadersVisible = true;
             grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
             grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-            grid.ColumnHeadersHeight = 46;
-            grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(18, 27, 43);
-            grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(183, 195, 216);
-            grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 8.5F);
-            grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
-            grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 0, 0, 0);
-            grid.DefaultCellStyle.BackColor = Surface2;
+            grid.ColumnHeadersHeight = 40;
+            grid.ColumnHeadersDefaultCellStyle.BackColor = Surface;
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = Muted;
+            grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Surface;
+            grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Muted;
+            grid.ColumnHeadersDefaultCellStyle.Font = headerFont;
+            grid.DefaultCellStyle.BackColor = Surface;
             grid.DefaultCellStyle.ForeColor = TextColor;
-            grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(34, 47, 72);
+            grid.DefaultCellStyle.SelectionBackColor = RowSelected;
             grid.DefaultCellStyle.SelectionForeColor = TextColor;
-            grid.DefaultCellStyle.Font = new Font("Segoe UI", 9.5F);
-            grid.DefaultCellStyle.Padding = new Padding(8, 0, 8, 0);
-            grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(16, 24, 39);
-            grid.RowTemplate.Height = 52;
+            grid.DefaultCellStyle.Font = cellFont;
+            grid.RowTemplate.Height = 56;
             grid.AutoGenerateColumns = false;
             grid.ShowCellToolTips = false;
+            grid.StandardTab = true;
 
             DataGridViewTextBoxColumn creator = new DataGridViewTextBoxColumn();
             creator.Name = "Creator";
             creator.HeaderText = "CREATOR";
-            creator.Width = 145;
-            creator.MinimumWidth = 145;
+            creator.Width = 160;
             creator.SortMode = DataGridViewColumnSortMode.Programmatic;
-            creator.DefaultCellStyle.Font = creatorFont;
 
-            DataGridViewLinkColumn link = new DataGridViewLinkColumn();
+            DataGridViewTextBoxColumn link = new DataGridViewTextBoxColumn();
             link.Name = "Link";
             link.HeaderText = "LINK";
             link.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
-            link.MinimumWidth = 210;
-            link.LinkColor = Color.FromArgb(125, 211, 252);
-            link.ActiveLinkColor = Color.White;
-            link.VisitedLinkColor = Color.FromArgb(125, 211, 252);
-            link.TrackVisitedState = false;
+            link.MinimumWidth = 140;
             link.SortMode = DataGridViewColumnSortMode.Programmatic;
-
-            // Copy icon is painted inside the LINK cell so it sits immediately
-            // beside the URL without wasting a separate divider/column.
-            link.DefaultCellStyle.Padding = new Padding(8, 0, 38, 0);
 
             DataGridViewTextBoxColumn ticket = new DataGridViewTextBoxColumn();
             ticket.Name = "Ticket";
-            ticket.HeaderText = "TICKET";
-            ticket.Width = 110;
+            ticket.HeaderText = "TICKETS";
+            ticket.Width = 156;
             ticket.SortMode = DataGridViewColumnSortMode.Programmatic;
-            ticket.DefaultCellStyle.Font = ticketFont;
-            ticket.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
 
             DataGridViewTextBoxColumn promo = new DataGridViewTextBoxColumn();
             promo.Name = "PromoCode";
             promo.HeaderText = "PROMOCODE";
-            promo.Width = 200;
-            promo.MinimumWidth = 190;
+            promo.Width = 210;
             promo.SortMode = DataGridViewColumnSortMode.Programmatic;
-            // Reserve room for the inline copy icon.
-            promo.DefaultCellStyle.Padding = new Padding(8, 0, 38, 0);
 
             DataGridViewTextBoxColumn minimumDeposit = new DataGridViewTextBoxColumn();
             minimumDeposit.Name = "MinimumDeposit";
-            minimumDeposit.HeaderText = "MINIMUM DEPOSIT";
-            minimumDeposit.Width = 120;
+            minimumDeposit.HeaderText = "MIN DEPOSIT";
+            minimumDeposit.Width = 110;
             minimumDeposit.SortMode = DataGridViewColumnSortMode.Programmatic;
 
             DataGridViewTextBoxColumn deadline = new DataGridViewTextBoxColumn();
             deadline.Name = "Deadline";
             deadline.HeaderText = "DEADLINE";
-            deadline.Width = 125;
+            deadline.Width = 170;
             deadline.SortMode = DataGridViewColumnSortMode.Programmatic;
 
-            DataGridViewButtonColumn joinedAction = MakeIconColumn("JoinedAction", 48);
+            DataGridViewButtonColumn joinedAction = MakeIconColumn("JoinedAction", 56);
 
             grid.Columns.AddRange(new DataGridViewColumn[] { creator, link, ticket, promo, minimumDeposit, deadline, joinedAction });
             grid.CellMouseClick += GridCellMouseClick;
             grid.CellPainting += GridCellPainting;
             grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
+            grid.CellMouseMove += GridCellMouseMove;
+            grid.CellMouseLeave += delegate { SetHover(-1, -1, false); };
+            grid.MouseLeave += delegate { SetHover(-1, -1, false); };
             grid.Paint += delegate(object sender, PaintEventArgs e)
             {
                 if (grid.Rows.Count != 0) return;
-                string message = filterBox.TextLength > 0 ? "No matching giveaways\nTry another search or press Esc to clear."
-                    : showingJoined ? "No joined giveaways yet\nUse the + action on a giveaway to save it here."
-                    : showingHistory ? "No giveaway history yet\nEnded giveaways will appear here."
-                    : "No active giveaways yet\nRefresh saved links or run Deep Search to discover giveaways.";
-                Rectangle area = new Rectangle(20, grid.ColumnHeadersHeight + 30,
-                    Math.Max(1, grid.ClientSize.Width - 40), Math.Max(1, grid.ClientSize.Height - grid.ColumnHeadersHeight - 60));
-                TextRenderer.DrawText(e.Graphics, message, Font, area, Muted,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                string heading = filterBox.TextLength > 0 ? "No matching giveaways"
+                    : showingJoined ? "Nothing joined yet"
+                    : showingHistory ? "No history yet"
+                    : "No active giveaways";
+                string detail = filterBox.TextLength > 0 ? "Try another search, or press Esc to clear it."
+                    : showingJoined ? "Use the + button on a giveaway to save it here."
+                    : showingHistory ? "Ended giveaways are kept here automatically."
+                    : "Press Refresh to re-check saved links, or Deep Search to find new ones.";
+                int top = grid.ColumnHeadersHeight + Math.Max(30, (grid.ClientSize.Height - grid.ColumnHeadersHeight) / 2 - 50);
+                Rectangle headingRect = new Rectangle(20, top, Math.Max(1, grid.ClientSize.Width - 40), 28);
+                Rectangle detailRect = new Rectangle(20, top + 30, Math.Max(1, grid.ClientSize.Width - 40), 24);
+                TextRenderer.DrawText(e.Graphics, heading, creatorFont, headingRect, TextColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+                TextRenderer.DrawText(e.Graphics, detail, smallFont, detailRect, Muted,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
             };
+
             Panel content = new Panel();
             content.Dock = DockStyle.Fill;
             content.Margin = new Padding(0);
             content.Controls.Add(grid);
             logsPanel = new Panel();
             logsPanel.Dock = DockStyle.Fill;
-            logsPanel.Padding = new Padding(14);
-            logsPanel.BackColor = Surface2;
+            logsPanel.Padding = new Padding(18, 14, 18, 14);
+            logsPanel.BackColor = Surface;
             logText = new TextBox();
             logText.Multiline = true;
-            logText.ScrollBars = ScrollBars.Both;
+            logText.ScrollBars = ScrollBars.Vertical;
             logText.Dock = DockStyle.Fill;
             logText.ReadOnly = true;
-            logText.WordWrap = false;
+            logText.WordWrap = true;
             logText.BorderStyle = BorderStyle.None;
-            logText.BackColor = Surface2;
-            logText.ForeColor = TextColor;
-            logText.Font = new Font("Consolas", 9F);
+            logText.BackColor = Surface;
+            logText.ForeColor = Color.FromArgb(170, 182, 205);
+            logText.Font = new Font("Consolas", 9.5F);
             logText.AccessibleName = "Live activity logs";
+            Ui.DarkScrollBars(logText);
+            Ui.DarkScrollBars(grid);
             logsPanel.Controls.Add(logText);
             content.Controls.Add(logsPanel);
-            card.Controls.Add(content, 0, 2);
+            cardInner.Controls.Add(content, 0, 1);
+
+            // ---- Status bar ----
+            TableLayoutPanel status = new TableLayoutPanel();
+            status.Dock = DockStyle.Fill;
+            status.Margin = new Padding(0);
+            status.BackColor = Bg;
+            status.ColumnCount = 3;
+            status.RowCount = 1;
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 18F));
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            status.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.Controls.Add(status, 0, 4);
+
+            statusDot = new Panel();
+            statusDot.Size = new Size(10, 10);
+            statusDot.Anchor = AnchorStyles.None;
+            statusDot.Margin = new Padding(0);
+            statusDot.Paint += delegate(object s, PaintEventArgs pe)
+            {
+                pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                pe.Graphics.Clear(Bg);
+                using (SolidBrush b = new SolidBrush(statusDotColor))
+                    pe.Graphics.FillEllipse(b, 1, 1, 8, 8);
+            };
+            status.Controls.Add(statusDot, 0, 0);
+
+            scanStatus = new Label();
+            scanStatus.Dock = DockStyle.Fill;
+            scanStatus.Margin = new Padding(0);
+            scanStatus.ForeColor = Muted;
+            scanStatus.Font = new Font("Segoe UI", 9F);
+            scanStatus.TextAlign = ContentAlignment.MiddleLeft;
+            scanStatus.AutoEllipsis = true;
+            scanStatus.Text = "Ready";
+            status.Controls.Add(scanStatus, 1, 0);
+
+            lastCheck = new Label();
+            lastCheck.AutoSize = true;
+            lastCheck.Anchor = AnchorStyles.Right;
+            lastCheck.Margin = new Padding(12, 0, 0, 0);
+            lastCheck.ForeColor = Muted;
+            lastCheck.Font = new Font("Segoe UI", 9F);
+            lastCheck.Text = "Last checked: never";
+            status.Controls.Add(lastCheck, 2, 0);
 
             ResumeLayout(true);
         }
@@ -3087,80 +3354,24 @@ namespace SkinClubGiveawayDesktop
             column.Width = width;
             column.FlatStyle = FlatStyle.Flat;
             column.SortMode = DataGridViewColumnSortMode.NotSortable;
-            column.DefaultCellStyle.BackColor = Surface3;
-            column.DefaultCellStyle.ForeColor = TextColor;
-            column.DefaultCellStyle.SelectionBackColor = Surface3;
-            column.DefaultCellStyle.SelectionForeColor = TextColor;
-            column.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             return column;
         }
 
-        private Button MakeHeaderButton(string text, int width, bool emphasis)
+        private Button MakeHeaderButton(string text, int width, bool primary)
         {
-            DepthButton b = new DepthButton();
-            b.Text = text;
-            b.Width = width;
-            b.Height = 40;
-            b.Margin = new Padding(6, 0, 0, 0);
-            b.ForeColor = TextColor;
-            b.Font = new Font("Segoe UI Semibold", 9F);
-            if (emphasis)
-            {
-                b.TopColor = Color.FromArgb(126, 112, 255);
-                b.BottomColor = Color.FromArgb(86, 72, 215);
-                b.BorderColor3D = Color.FromArgb(155, 145, 255);
-            }
-            else
-            {
-                b.TopColor = ButtonTop;
-                b.BottomColor = ButtonBottom;
-                b.BorderColor3D = ButtonBorder;
-            }
-            return b;
+            return UiButton.Create(text, primary ? UiButtonKind.Primary : UiButtonKind.Ghost, width);
         }
 
-        private void SetDepthButtonTheme(Button button, Color accent, bool selected)
+        private UiButton MakeTab(string text)
         {
-            DepthButton b = button as DepthButton;
-            if (b == null) return;
-            if (selected)
-            {
-                b.TopColor = MixColor(Surface3, accent, 0.62);
-                b.BottomColor = MixColor(Bg, accent, 0.30);
-                b.BorderColor3D = MixColor(accent, Color.White, 0.14);
-            }
-            else
-            {
-                b.TopColor = ButtonTop;
-                b.BottomColor = ButtonBottom;
-                b.BorderColor3D = ButtonBorder;
-            }
-            b.Invalidate();
+            UiButton tab = UiButton.Create(text, UiButtonKind.Tab, 0);
+            tab.Margin = new Padding(0, 0, 18, 0);
+            return tab;
         }
 
         private Color MixColor(Color baseColor, Color accent, double amount)
         {
-            if (amount < 0) amount = 0;
-            if (amount > 1) amount = 1;
-            int r = (int)Math.Round(baseColor.R * (1.0 - amount) + accent.R * amount);
-            int g = (int)Math.Round(baseColor.G * (1.0 - amount) + accent.G * amount);
-            int b = (int)Math.Round(baseColor.B * (1.0 - amount) + accent.B * amount);
-            return Color.FromArgb(r, g, b);
-        }
-
-        private Label MakeStatLabel(string text, int width, Color accent)
-        {
-            Label l = new Label();
-            l.Width = width;
-            l.Height = 38;
-            l.Margin = new Padding(0, 7, 10, 0);
-            l.Text = text;
-            l.ForeColor = Color.White;
-            l.BackColor = MixColor(Surface, accent, 0.14);
-            l.BorderStyle = BorderStyle.None;
-            l.TextAlign = ContentAlignment.MiddleCenter;
-            l.Font = new Font("Segoe UI Semibold", 8.5F);
-            return l;
+            return Ui.Mix(baseColor, accent, amount);
         }
 
         private void GridColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
@@ -3179,116 +3390,250 @@ namespace SkinClubGiveawayDesktop
             Render();
         }
 
-        private Rectangle InlineCopyButtonRect(int columnIndex, int rowIndex, Rectangle cellBounds)
+        private static Rectangle CopyButtonRect(Rectangle cellBounds)
         {
-            int size = Math.Min(28, Math.Max(24, cellBounds.Height - 18));
-            int maxX = cellBounds.Right - size - 7;
-            int x = maxX;
-
-            try
-            {
-                DataGridViewCell cell = grid.Rows[rowIndex].Cells[columnIndex];
-                string text = Convert.ToString(cell.FormattedValue) ?? "";
-                Font font = cell.InheritedStyle.Font ?? grid.Font;
-                int textWidth = TextRenderer.MeasureText(text, font, new Size(int.MaxValue, cellBounds.Height),
-                    TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width;
-                // Put the icon immediately after the visible value when there is
-                // room; clamp it to the right edge for long URLs/codes.
-                x = Math.Min(maxX, cellBounds.Left + 8 + textWidth + 5);
-            }
-            catch { x = maxX; }
-
-            return new Rectangle(
-                x,
-                cellBounds.Y + (cellBounds.Height - size) / 2,
-                size, size);
+            int size = 28;
+            return new Rectangle(cellBounds.Right - size - 12, cellBounds.Y + (cellBounds.Height - size) / 2, size, size);
         }
 
-        private void DrawCopyIconButton(Graphics graphics, Rectangle r)
+        private Rectangle InlineCopyButtonRect(int columnIndex, int rowIndex, Rectangle cellBounds)
         {
-            Color top = MixColor(Surface3, Accent2, 0.38);
-            Color bottom = MixColor(Bg, Accent2, 0.18);
-            using (GraphicsPath path = MakeRoundedPath(r, 5))
-            using (LinearGradientBrush fill = new LinearGradientBrush(r, top, bottom, LinearGradientMode.Vertical))
-            using (Pen border = new Pen(MixColor(Accent2, Color.White, 0.05)))
-            {
-                graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                graphics.FillPath(fill, path);
-                graphics.DrawPath(border, path);
-            }
+            return CopyButtonRect(cellBounds);
+        }
 
-            using (Pen iconPen = new Pen(Color.White, 1.6F))
+        private void SetHover(int row, int column, bool onCopy)
+        {
+            if (row == hoverRow && column == hoverColumn && onCopy == hoverOnCopy) return;
+            int previous = hoverRow;
+            hoverRow = row;
+            hoverColumn = column;
+            hoverOnCopy = onCopy;
+            if (previous >= 0 && previous < grid.RowCount) grid.InvalidateRow(previous);
+            if (row >= 0 && row < grid.RowCount) grid.InvalidateRow(row);
+        }
+
+        private void GridCellMouseMove(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) { SetHover(-1, -1, false); grid.Cursor = Cursors.Default; return; }
+            string name = grid.Columns[e.ColumnIndex].Name;
+            Rectangle cell = grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false);
+            bool onCopy = (name == "Link" || name == "PromoCode") && CopyButtonRect(cell).Contains(cell.X + e.X, cell.Y + e.Y);
+            SetHover(e.RowIndex, e.ColumnIndex, onCopy);
+
+            GiveawayItem item = grid.Rows[e.RowIndex].Tag as GiveawayItem;
+            bool clickable = name == "JoinedAction" || name == "Link" ||
+                (name == "PromoCode" && item != null && !string.IsNullOrWhiteSpace(item.PromoCode) && item.PromoCode != "-");
+            grid.Cursor = clickable ? Cursors.Hand : Cursors.Default;
+        }
+
+        private static string ShortUrl(string url)
+        {
+            string s = (url ?? "").Trim();
+            if (s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(8);
+            else if (s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(7);
+            if (s.StartsWith("www.", StringComparison.OrdinalIgnoreCase)) s = s.Substring(4);
+            return s.TrimEnd('/');
+        }
+
+        private static readonly Color[] AvatarColors = new Color[]
+        {
+            Color.FromArgb(99, 102, 241), Color.FromArgb(56, 189, 248), Color.FromArgb(52, 211, 153),
+            Color.FromArgb(251, 146, 60), Color.FromArgb(244, 114, 182), Color.FromArgb(167, 139, 250)
+        };
+
+        private Color TicketColor(GiveawayItem item)
+        {
+            long remaining, total;
+            if (item != null && string.Equals(item.Status, "active", StringComparison.OrdinalIgnoreCase) &&
+                TryTicketNumbers(item.Ticket, out remaining, out total) && total > 0)
+                return remaining < 100 ? PriorityRed : (remaining < 250 ? PriorityYellow : PriorityGreen);
+            return TextColor;
+        }
+
+        private void DrawCopyIcon(Graphics g, Rectangle r, bool hot, bool rowHot)
+        {
+            if (hot)
+                using (GraphicsPath path = Ui.RoundPath(r, 7))
+                using (SolidBrush fill = new SolidBrush(Surface3))
+                using (Pen border = new Pen(Ui.LineStrong))
+                {
+                    g.FillPath(fill, path);
+                    g.DrawPath(border, path);
+                }
+            Color stroke = hot ? TextColor : (rowHot ? Muted : Color.FromArgb(78, 90, 113));
+            using (Pen pen = new Pen(stroke, 1.4F))
             {
-                iconPen.StartCap = LineCap.Round;
-                iconPen.EndCap = LineCap.Round;
-                Rectangle back = new Rectangle(r.Left + 7, r.Top + 6, 9, 11);
-                Rectangle front = new Rectangle(r.Left + 11, r.Top + 10, 9, 11);
-                graphics.DrawRectangle(iconPen, back);
-                graphics.DrawRectangle(iconPen, front);
+                pen.LineJoin = LineJoin.Round;
+                int x = r.X + (r.Width - 14) / 2, y = r.Y + (r.Height - 14) / 2;
+                g.DrawRectangle(pen, x + 4, y, 9, 9);
+                g.DrawLines(pen, new Point[] { new Point(x + 2, y + 4), new Point(x, y + 4), new Point(x, y + 13), new Point(x + 9, y + 13), new Point(x + 9, y + 11) });
             }
         }
 
         private void GridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            if (e.ColumnIndex < 0) return;
+            Graphics g = e.Graphics;
+            Rectangle cb = e.CellBounds;
             string name = grid.Columns[e.ColumnIndex].Name;
 
-            // LINK and PROMOCODE keep their normal text/link cell and get a small
-            // copy button painted inside the same cell.  No extra copy column,
-            // therefore no extra divider or wasted width.
-            if (name == "Link" || name == "PromoCode")
+            if (e.RowIndex < 0)
             {
-                e.Paint(e.CellBounds, DataGridViewPaintParts.All);
-                if (name == "PromoCode")
+                using (SolidBrush b = new SolidBrush(Surface)) g.FillRectangle(b, cb);
+                using (Pen p = new Pen(Line)) g.DrawLine(p, cb.Left, cb.Bottom - 1, cb.Right, cb.Bottom - 1);
+                bool sorted = string.Equals(name, sortColumn, StringComparison.OrdinalIgnoreCase);
+                string header = Convert.ToString(e.Value) ?? "";
+                Rectangle headerRect = new Rectangle(cb.X + 16, cb.Y, Math.Max(1, cb.Width - 34), cb.Height);
+                TextRenderer.DrawText(g, header, headerFont, headerRect, sorted ? TextColor : Muted, Ui.Single);
+                if (sorted && header.Length > 0)
                 {
-                    GiveawayItem item = grid.Rows[e.RowIndex].Tag as GiveawayItem;
-                    if (item == null || string.IsNullOrWhiteSpace(item.PromoCode) || item.PromoCode == "-")
-                    {
-                        e.Handled = true;
-                        return;
-                    }
+                    int tw = TextRenderer.MeasureText(header, headerFont, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
+                    int ax = Math.Min(cb.Right - 16, cb.X + 16 + tw + 9), ay = cb.Y + cb.Height / 2;
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    Point[] tri = sortAscending
+                        ? new Point[] { new Point(ax - 4, ay + 2), new Point(ax + 4, ay + 2), new Point(ax, ay - 3) }
+                        : new Point[] { new Point(ax - 4, ay - 2), new Point(ax + 4, ay - 2), new Point(ax, ay + 3) };
+                    using (SolidBrush b = new SolidBrush(Ui.AccentHover)) g.FillPolygon(b, tri);
                 }
-                DrawCopyIconButton(e.Graphics, InlineCopyButtonRect(e.ColumnIndex, e.RowIndex, e.CellBounds));
                 e.Handled = true;
                 return;
             }
 
-            if (name != "JoinedAction") return;
+            GiveawayItem item = grid.Rows[e.RowIndex].Tag as GiveawayItem;
+            bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+            bool rowHot = e.RowIndex == hoverRow;
+            bool ended = item != null && string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase);
+            string value = Convert.ToString(e.Value) ?? "";
+            bool missing = value.Length == 0 || value == "-";
+            Color fore = ended ? Color.FromArgb(150, 161, 182) : TextColor;
 
-            e.PaintBackground(e.CellBounds, true);
-            int size = Math.Min(32, Math.Max(22, e.CellBounds.Height - 16));
-            Rectangle r = new Rectangle(
-                e.CellBounds.X + (e.CellBounds.Width - size) / 2,
-                e.CellBounds.Y + (e.CellBounds.Height - size) / 2,
-                size, size);
+            using (SolidBrush b = new SolidBrush(selected ? RowSelected : (rowHot ? RowHover : Surface))) g.FillRectangle(b, cb);
+            using (Pen p = new Pen(Line)) g.DrawLine(p, cb.Left, cb.Bottom - 1, cb.Right, cb.Bottom - 1);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            Color accent = showingJoined ? Danger : Success;
-            Color top = MixColor(Surface3, accent, 0.38);
-            Color bottom = MixColor(Bg, accent, 0.18);
-            using (GraphicsPath path = MakeRoundedPath(r, 5))
-            using (LinearGradientBrush fill = new LinearGradientBrush(r, top, bottom, LinearGradientMode.Vertical))
-            using (Pen border = new Pen(MixColor(accent, Color.White, 0.05)))
+            const int pad = 16;
+            Rectangle text = new Rectangle(cb.X + pad, cb.Y, Math.Max(1, cb.Width - pad * 2), cb.Height - 1);
+
+            switch (name)
             {
-                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                e.Graphics.FillPath(fill, path);
-                e.Graphics.DrawPath(border, path);
-            }
-
-            using (Pen iconPen = new Pen(Color.White, 1.7F))
-            {
-                iconPen.StartCap = LineCap.Round;
-                iconPen.EndCap = LineCap.Round;
-                if (showingJoined)
-                {
-                    int pad = 9;
-                    e.Graphics.DrawLine(iconPen, r.Left + pad, r.Top + pad, r.Right - pad, r.Bottom - pad);
-                    e.Graphics.DrawLine(iconPen, r.Right - pad, r.Top + pad, r.Left + pad, r.Bottom - pad);
-                }
-                else
-                {
-                    e.Graphics.DrawLine(iconPen, r.Left + 9, r.Top + 16, r.Right - 9, r.Top + 16);
-                    e.Graphics.DrawLine(iconPen, r.Left + 16, r.Top + 9, r.Left + 16, r.Bottom - 9);
-                }
+                case "Creator":
+                    {
+                        string initial = value.Length > 0 ? value.Substring(0, 1).ToUpperInvariant() : "?";
+                        Color tone = AvatarColors[Math.Abs(value.ToLowerInvariant().GetHashCode()) % AvatarColors.Length];
+                        Rectangle av = new Rectangle(cb.X + pad, cb.Y + (cb.Height - 1 - 30) / 2, 30, 30);
+                        using (SolidBrush b = new SolidBrush(Ui.Mix(Surface, tone, 0.22))) g.FillEllipse(b, av);
+                        TextRenderer.DrawText(g, initial, cellBold, av, Ui.Mix(tone, Color.White, 0.35),
+                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+                        Rectangle nameRect = new Rectangle(av.Right + 12, cb.Y, Math.Max(1, cb.Right - av.Right - 12 - 8), cb.Height - 1);
+                        TextRenderer.DrawText(g, value, cellBold, nameRect, fore, Ui.Single);
+                        break;
+                    }
+                case "Link":
+                    {
+                        Rectangle linkRect = new Rectangle(text.X, text.Y, Math.Max(1, text.Width - 40), text.Height);
+                        bool onLink = rowHot && hoverColumn == e.ColumnIndex && !hoverOnCopy;
+                        TextRenderer.DrawText(g, ShortUrl(value), cellFont, linkRect, onLink ? Color.White : (ended ? Ui.Muted : Ui.AccentHover), Ui.Single);
+                        DrawCopyIcon(g, CopyButtonRect(cb), rowHot && hoverColumn == e.ColumnIndex && hoverOnCopy, rowHot);
+                        break;
+                    }
+                case "Ticket":
+                    {
+                        long remaining, total;
+                        if (missing || !TryTicketNumbers(value, out remaining, out total) || total <= 0)
+                        {
+                            TextRenderer.DrawText(g, missing ? "–" : value, cellFont, text, Ui.Muted, Ui.Single);
+                            break;
+                        }
+                        Color tone = TicketColor(item);
+                        Rectangle numbers = new Rectangle(text.X, text.Y, 84, text.Height);
+                        TextRenderer.DrawText(g, value, cellBold, numbers, tone, Ui.Single);
+                        int barX = text.X + 88, barW = Math.Min(36, text.Right - barX);
+                        if (barW > 12)
+                        {
+                            int cy = cb.Y + (cb.Height - 1) / 2;
+                            using (GraphicsPath track = Ui.RoundPath(new Rectangle(barX, cy - 2, barW, 4), 2))
+                            using (SolidBrush b = new SolidBrush(Ui.Line)) g.FillPath(b, track);
+                            int fillW = (int)Math.Round(barW * Math.Min(1.0, (double)remaining / total));
+                            if (fillW > 3)
+                                using (GraphicsPath fillPath = Ui.RoundPath(new Rectangle(barX, cy - 2, fillW, 4), 2))
+                                using (SolidBrush b = new SolidBrush(tone)) g.FillPath(b, fillPath);
+                        }
+                        break;
+                    }
+                case "PromoCode":
+                    {
+                        if (missing) { TextRenderer.DrawText(g, "–", cellFont, text, Ui.Muted, Ui.Single); break; }
+                        int maxPill = Math.Max(40, cb.Width - pad - 52);
+                        int pillW = Math.Min(maxPill, TextRenderer.MeasureText(value, monoFont, new Size(1000, 40), TextFormatFlags.NoPadding).Width + 22);
+                        Rectangle pill = new Rectangle(cb.X + pad, cb.Y + (cb.Height - 1 - 28) / 2, pillW, 28);
+                        using (GraphicsPath path = Ui.RoundPath(pill, 6))
+                        using (SolidBrush b = new SolidBrush(rowHot ? Surface3 : Surface2))
+                        using (Pen p = new Pen(Ui.Line))
+                        {
+                            g.FillPath(b, path);
+                            g.DrawPath(p, path);
+                        }
+                        TextRenderer.DrawText(g, value, monoFont, new Rectangle(pill.X + 11, pill.Y, pill.Width - 14, pill.Height), fore, Ui.Single);
+                        DrawCopyIcon(g, CopyButtonRect(cb), rowHot && hoverColumn == e.ColumnIndex && hoverOnCopy, rowHot);
+                        break;
+                    }
+                case "MinimumDeposit":
+                    TextRenderer.DrawText(g, missing ? "–" : value, cellFont, text, missing ? Ui.Muted : fore, Ui.Single);
+                    break;
+                case "Deadline":
+                    {
+                        if (missing) { TextRenderer.DrawText(g, "–", cellFont, text, Ui.Muted, Ui.Single); break; }
+                        Color tone = Ui.Muted;
+                        string relative = null;
+                        DateTime due;
+                        if (!ended && item != null && TryDeadlineDate(item, out due))
+                        {
+                            int days = (int)(due.Date - DateTime.Now.Date).TotalDays;
+                            tone = days <= 2 ? PriorityRed : (days <= 7 ? PriorityYellow : PriorityGreen);
+                            relative = days < 0 ? "ended" : (days == 0 ? "today" : (days == 1 ? "tomorrow" : "in " + days + "d"));
+                        }
+                        int dotX = text.X;
+                        if (relative != null)
+                        {
+                            using (SolidBrush b = new SolidBrush(tone)) g.FillEllipse(b, dotX, cb.Y + (cb.Height - 1) / 2 - 3, 7, 7);
+                            dotX += 15;
+                        }
+                        int tw = TextRenderer.MeasureText(value, cellFont, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
+                        TextRenderer.DrawText(g, value, cellFont, new Rectangle(dotX, text.Y, Math.Max(1, text.Right - dotX), text.Height), fore, Ui.Single);
+                        if (relative != null && dotX + tw + 8 < text.Right)
+                            TextRenderer.DrawText(g, relative, smallFont, new Rectangle(dotX + tw + 8, text.Y, text.Right - dotX - tw - 8, text.Height), tone, Ui.Single);
+                        break;
+                    }
+                case "JoinedAction":
+                    {
+                        Color tone = showingJoined ? Danger : Success;
+                        bool hot = rowHot && hoverColumn == e.ColumnIndex;
+                        int size = 30;
+                        Rectangle btn = new Rectangle(cb.X + (cb.Width - size) / 2, cb.Y + (cb.Height - 1 - size) / 2, size, size);
+                        using (SolidBrush b = new SolidBrush(Ui.Mix(Surface2, tone, hot ? 0.32 : 0.14)))
+                        using (Pen p = new Pen(Ui.Mix(Surface2, tone, hot ? 0.75 : 0.40)))
+                        {
+                            g.FillEllipse(b, btn);
+                            g.DrawEllipse(p, btn);
+                        }
+                        using (Pen icon = new Pen(hot ? Color.White : Ui.Mix(tone, Color.White, 0.25), 1.8F))
+                        {
+                            icon.StartCap = LineCap.Round;
+                            icon.EndCap = LineCap.Round;
+                            int cx = btn.X + size / 2, cy = btn.Y + size / 2;
+                            if (showingJoined)
+                            {
+                                g.DrawLine(icon, cx - 4, cy - 4, cx + 4, cy + 4);
+                                g.DrawLine(icon, cx + 4, cy - 4, cx - 4, cy + 4);
+                            }
+                            else
+                            {
+                                g.DrawLine(icon, cx - 5, cy, cx + 5, cy);
+                                g.DrawLine(icon, cx, cy - 5, cx, cy + 5);
+                            }
+                        }
+                        break;
+                    }
             }
             e.Handled = true;
         }
@@ -3353,7 +3698,9 @@ namespace SkinClubGiveawayDesktop
                 Rectangle cellBounds = grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false);
                 Rectangle copyRect = InlineCopyButtonRect(e.ColumnIndex, e.RowIndex, cellBounds);
                 Point clickPoint = new Point(cellBounds.X + e.X, cellBounds.Y + e.Y);
-                bool copyHit = copyRect.Contains(clickPoint);
+                // A promocode is copied by clicking anywhere in its cell; a link is
+                // opened by clicking it and copied with the icon.
+                bool copyHit = columnName == "PromoCode" || copyRect.Contains(clickPoint);
                 if (copyHit)
                 {
                     if (columnName == "Link")
@@ -3634,36 +3981,26 @@ namespace SkinClubGiveawayDesktop
 
         private void ApplyViewTheme()
         {
-            Color accent = showingJoined ? JoinedView : (showingHistory ? HistoryView : ActiveView);
-            // Each tab has its own subtle hue, but the saturation is intentionally low so the
-            // UI reads like a production desktop dashboard rather than three brightly painted pages.
-            Color viewHeader = MixColor(Surface, accent, showingJoined ? 0.105 : 0.085);
-            Color viewTable = MixColor(Surface2, accent, showingJoined ? 0.070 : 0.055);
-            Color viewAlt = MixColor(Color.FromArgb(16, 24, 39), accent, showingJoined ? 0.085 : 0.070);
-
-            if (cardPanelRef != null) cardPanelRef.BackColor = MixColor(Line, accent, 0.28);
-            if (cardHeaderPanel != null) cardHeaderPanel.BackColor = viewHeader;
-            if (titlePanelRef != null) titlePanelRef.BackColor = viewHeader;
-            if (filterPanelRef != null) filterPanelRef.BackColor = viewHeader;
-            if (activityBarRef != null) activityBarRef.BackColor = MixColor(Color.FromArgb(12, 19, 32), accent, 0.035);
-            if (viewAccentRef != null) viewAccentRef.BackColor = accent;
-
-            if (grid != null)
-            {
-                grid.BackgroundColor = viewTable;
-                grid.DefaultCellStyle.BackColor = viewTable;
-                grid.AlternatingRowsDefaultCellStyle.BackColor = viewAlt;
-                grid.DefaultCellStyle.SelectionBackColor = MixColor(Color.FromArgb(31, 43, 65), accent, 0.22);
-                grid.ColumnHeadersDefaultCellStyle.BackColor = MixColor(Color.FromArgb(18, 27, 43), accent, 0.075);
-            }
-
-            SetDepthButtonTheme(historyButton, HistoryView, showingHistory);
-            SetDepthButtonTheme(activeButton, ActiveView, !showingHistory && !showingJoined && !showingLogs);
-            SetDepthButtonTheme(logsButton, Accent2, showingLogs);
-            SetDepthButtonTheme(joinedButton, JoinedView, showingJoined);
-            viewTitle.ForeColor = accent;
+            SetTab(activeButton, !showingHistory && !showingJoined && !showingLogs);
+            SetTab(joinedButton, showingJoined);
+            SetTab(historyButton, showingHistory);
+            SetTab(logsButton, showingLogs);
+            viewTitle.ForeColor = TextColor;
         }
 
+        private static void SetTab(Button button, bool selected)
+        {
+            UiButton tab = button as UiButton;
+            if (tab != null) tab.Selected = selected;
+        }
+
+        private static void SetTabText(Button button, string text, int count)
+        {
+            UiButton tab = button as UiButton;
+            if (tab == null) { button.Text = text + "  \u00b7  " + count; return; }
+            tab.Text = text;
+            tab.Badge = count.ToString();
+        }
         // Column positions, matching the order columns are added in BuildUi().
         private const int ColTicket = 2, ColPromo = 3, ColDeposit = 4, ColDeadline = 5, ColAction = 6;
 
@@ -3690,33 +4027,33 @@ namespace SkinClubGiveawayDesktop
             int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
             int hc = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
             int jc = data.Items.Count(delegate(GiveawayItem i) { return i.Joined; });
-            lastCheck.Text = "LAST CHECK  " + FormatTime(data.LastScan);
+            lastCheck.Text = "Last checked: " + FormatTime(data.LastScan);
 
-            activeButton.Text = "Active  ·  " + ac;
-            historyButton.Text = "History  ·  " + hc;
-            joinedButton.Text = "Joined  ·  " + jc;
+            SetTabText(activeButton, "Active", ac);
+            SetTabText(historyButton, "History", hc);
+            SetTabText(joinedButton, "Joined", jc);
 
             if (showingJoined)
             {
                 viewTitle.Text = "Joined giveaways";
-                viewSubtitle.Text = "Only joined giveaways appear here • use the × button to return an item to Active or History";
+                viewSubtitle.Text = "Saved by you  \u00b7  use \u00d7 to move an item back to Active or History";
             }
             else if (showingHistory)
             {
                 viewTitle.Text = "Giveaway history";
-                viewSubtitle.Text = "The 30 most recent ended giveaways • older entries are removed automatically";
+                viewSubtitle.Text = "The 30 most recent ended giveaways  \u00b7  older ones are removed automatically";
             }
             else
             {
                 viewTitle.Text = "Active giveaways";
-                viewSubtitle.Text = "Verified running giveaways you have not joined yet • click a column header to sort";
+                viewSubtitle.Text = "Running and not joined yet  \u00b7  click a column header to sort";
             }
 
             ApplyViewTheme();
             if (showingLogs)
             {
                 viewTitle.Text = "Activity logs";
-                viewTitle.ForeColor = Accent2;
+                viewTitle.ForeColor = TextColor;
                 logsPanel.BringToFront();
                 UpdateLogs();
                 return;
@@ -3730,41 +4067,21 @@ namespace SkinClubGiveawayDesktop
             string selectedUrl = selectedItem == null ? null : selectedItem.Url;
             int firstRow = grid.FirstDisplayedScrollingRowIndex;
             List<GiveawayItem> visibleItems = CurrentItems();
-            if (filterBox.TextLength > 0) viewSubtitle.Text = visibleItems.Count + " matching giveaway(s) • Esc clears search";
+            if (filterBox.TextLength > 0) viewSubtitle.Text = visibleItems.Count + (visibleItems.Count == 1 ? " match" : " matches") + "  \u00b7  Esc clears the search";
             List<DataGridViewRow> built = new List<DataGridViewRow>(visibleItems.Count);
-            Color actionBack = showingJoined ? MixColor(Surface3, Danger, 0.08) : MixColor(Surface3, Success, 0.08);
             foreach (GiveawayItem i in visibleItems)
             {
                 bool ended = string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase);
                 string deadline = i.Deadline ?? "-";
-                if ((showingHistory || showingJoined) && ended && (string.IsNullOrWhiteSpace(deadline) || deadline == "-")) deadline = "ENDED";
-                if (!string.IsNullOrWhiteSpace(deadline) && deadline != "-") deadline = deadline.ToUpperInvariant();
+                if ((showingHistory || showingJoined) && ended && (string.IsNullOrWhiteSpace(deadline) || deadline == "-")) deadline = "Ended";
+                
                 string promoCode = string.IsNullOrWhiteSpace(i.PromoCode) ? "-" : i.PromoCode;
                 string minimumDeposit = string.IsNullOrWhiteSpace(i.MinimumDeposit) ? "-" : i.MinimumDeposit;
                 DataGridViewRow gridRow = new DataGridViewRow();
                 gridRow.CreateCells(grid, i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", promoCode, minimumDeposit, deadline, "");
                 gridRow.Tag = i;
+                gridRow.Height = 56;
 
-                bool activeLike = string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase);
-                DataGridViewCellCollection cells = gridRow.Cells;
-                cells[ColTicket].Style.ForeColor = Muted;
-                cells[ColPromo].Style.ForeColor = promoCode == "-" ? Muted : TextColor;
-                cells[ColDeposit].Style.ForeColor = minimumDeposit == "-" ? Muted : TextColor;
-                cells[ColDeadline].Style.ForeColor = Muted;
-                if (ended) gridRow.DefaultCellStyle.ForeColor = Color.FromArgb(183, 193, 208);
-
-                long remaining, total;
-                if (activeLike && TryTicketNumbers(i.Ticket, out remaining, out total) && total > 0)
-                    cells[ColTicket].Style.ForeColor = remaining < 100 ? PriorityRed : (remaining < 250 ? PriorityYellow : PriorityGreen);
-
-                DateTime due;
-                if (activeLike && TryDeadlineDate(i, out due))
-                {
-                    double days = (due.Date - DateTime.Now.Date).TotalDays;
-                    cells[ColDeadline].Style.ForeColor = days <= 2 ? PriorityRed : (days <= 7 ? PriorityYellow : PriorityGreen);
-                }
-
-                cells[ColAction].Style.BackColor = actionBack;
                 built.Add(gridRow);
             }
 
@@ -3798,7 +4115,7 @@ namespace SkinClubGiveawayDesktop
             }
             try
             {
-                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/5  •  Queued pages " + Scanner.QueuedRenders + "  •  Latest 2,000 events";
+                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/5  \u00b7  Queued pages " + Scanner.QueuedRenders + "  \u00b7  Latest 2,000 events";
             }
             catch { viewSubtitle.Text = "Browser count unavailable — check cleanup errors below"; }
         }
@@ -3813,11 +4130,11 @@ namespace SkinClubGiveawayDesktop
 
         private string FormatTime(string iso)
         {
-            if (string.IsNullOrWhiteSpace(iso)) return "NEVER";
+            if (string.IsNullOrWhiteSpace(iso)) return "never";
             DateTime dt;
             if (DateTime.TryParse(iso, out dt))
-                return dt.ToLocalTime().ToString("MMM d, h:mm tt", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
-            return "NEVER";
+                return dt.ToLocalTime().ToString("MMM d, h:mm tt", System.Globalization.CultureInfo.InvariantCulture);
+            return "never";
         }
 
         private AppData CloneDataForScan(AppData source)
@@ -3851,6 +4168,9 @@ namespace SkinClubGiveawayDesktop
             scanStatus.Text = value ? message : "Ready";
             ActivityLog.Write("APP", value ? message : "Operation finished");
             scanStatus.ForeColor = value ? Warning : Muted;
+            if (scanStrip != null) scanStrip.Active = value;
+            statusDotColor = value ? Warning : Success;
+            if (statusDot != null) statusDot.Invalidate();
 
             // Never force the Windows busy cursor. Scanning is done on a worker
             // thread, so the UI message pump stays responsive while the status bar

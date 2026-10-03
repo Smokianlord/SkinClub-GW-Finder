@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Much faster refresh: metadata already resolved for a saved giveaway (deadline, promocode, minimum deposit) is reused instead of relaunching a headless browser for every page on every refresh. Pages that still lack metadata are retried at most every 12 hours.
+- Complete interface redesign: flat dark theme, underline tabs with count badges, rounded search field with a dark field picker, 56px rows with creator avatars, ticket progress bars, promocode chips, deadline countdown, hover states, scan progress strip, status bar and dark title bar.
 - Faster HTTP checks (16 concurrent page checks during refresh).
 - Faster browsing and searching: rows are built in one batch, searching only rebuilds the table rows, and sort comparisons use precompiled patterns.
 - Log view updates once per second instead of twice.
