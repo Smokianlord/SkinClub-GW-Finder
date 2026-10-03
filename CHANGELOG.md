@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+- Much faster refresh: metadata already resolved for a saved giveaway (deadline, promocode, minimum deposit) is reused instead of relaunching a headless browser for every page on every refresh. Pages that still lack metadata are retried at most every 12 hours.
+- Faster HTTP checks (16 concurrent page checks during refresh).
+- Faster browsing and searching: rows are built in one batch, searching only rebuilds the table rows, and sort comparisons use precompiled patterns.
+- Log view updates once per second instead of twice.
+- Repository cleanup: removed loose per-fix notes (history lives in this changelog and git).
+
 ## [1.3.0] - 2026-09-22
 
 - Added a live Logs tab with process counts, queued pages, errors, Copy/Clear, and a bounded 2,000-event session history.

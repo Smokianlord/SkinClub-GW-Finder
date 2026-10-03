@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -43,6 +43,7 @@ namespace SkinClubGiveawayDesktop
         public bool Joined { get; set; }
         public string JoinedAt { get; set; }
         public string HistorySince { get; set; }
+        public string RenderedAt { get; set; }
     }
 
     public class AppData
@@ -353,6 +354,19 @@ namespace SkinClubGiveawayDesktop
         private static readonly Dictionary<string, Tuple<DateTime, RenderedFields>> RenderCache =
             new Dictionary<string, Tuple<DateTime, RenderedFields>>(StringComparer.OrdinalIgnoreCase);
         private static readonly TimeSpan RenderCacheLifetime = TimeSpan.FromMinutes(10);
+        // How long to wait before launching the browser again for a page whose
+        // promocode / deposit / deadline could not be found on the last attempt.
+        private static readonly TimeSpan MetadataRetryInterval = TimeSpan.FromHours(12);
+        // Snapshot of already-saved items, keyed by GiveawayKey, for the scan in progress.
+        private static volatile Dictionary<string, GiveawayItem> KnownItems;
+
+        private static Dictionary<string, GiveawayItem> IndexKnown(AppData data)
+        {
+            Dictionary<string, GiveawayItem> map = new Dictionary<string, GiveawayItem>(StringComparer.OrdinalIgnoreCase);
+            foreach (GiveawayItem i in data.Items)
+                if (i != null && !string.IsNullOrWhiteSpace(i.Url)) map[GiveawayKey(i.Url)] = i;
+            return map;
+        }
 
         private static Dictionary<string, string> BuildDomainCreators()
         {
@@ -1469,9 +1483,37 @@ namespace SkinClubGiveawayDesktop
                     // no deadline, use the installed Edge/Chrome engine to render the DOM
                     // and convert the resulting remaining-hours value to a calendar date.
                     bool activePage = string.Equals(item.Status, "active", StringComparison.OrdinalIgnoreCase);
-                    bool missingMetadata = item.PromoCode == "-" || item.MinimumDeposit == "-";
-                    bool needsRenderedDeadline = activePage &&
-                        (item.Deadline == "-" || Regex.IsMatch(html, @"time\s*to\s*completion", RegexOptions.IgnoreCase));
+
+                    // Re-use metadata we already resolved on an earlier pass. Launching a
+                    // headless browser for every saved page on every refresh was the main
+                    // reason refreshes took minutes; the deadline/promo/deposit of a running
+                    // giveaway do not change once known.
+                    bool recentlyRendered = false;
+                    GiveawayItem prior = null;
+                    Dictionary<string, GiveawayItem> priorMap = KnownItems;
+                    if (priorMap != null) priorMap.TryGetValue(GiveawayKey(c.Url), out prior);
+                    if (prior != null)
+                    {
+                        item.RenderedAt = prior.RenderedAt;
+                        DateTime renderedAt;
+                        recentlyRendered = DateTime.TryParse(prior.RenderedAt, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.RoundtripKind, out renderedAt) &&
+                            DateTime.UtcNow - renderedAt.ToUniversalTime() < MetadataRetryInterval;
+                        if (activePage)
+                        {
+                            DateTime knownDeadline;
+                            if (item.Deadline == "-" && !string.IsNullOrWhiteSpace(prior.Deadline) && prior.Deadline != "-" &&
+                                DateTime.TryParse(prior.Deadline, out knownDeadline) && knownDeadline.Date >= DateTime.Now.Date)
+                                item.Deadline = prior.Deadline;
+                        }
+                        if (item.PromoCode == "-" && !string.IsNullOrWhiteSpace(prior.PromoCode) && prior.PromoCode != "-")
+                            item.PromoCode = prior.PromoCode;
+                        if (item.MinimumDeposit == "-" && !string.IsNullOrWhiteSpace(prior.MinimumDeposit) && prior.MinimumDeposit != "-")
+                            item.MinimumDeposit = prior.MinimumDeposit;
+                    }
+
+                    bool missingMetadata = (item.PromoCode == "-" || item.MinimumDeposit == "-") && !recentlyRendered;
+                    bool needsRenderedDeadline = activePage && item.Deadline == "-" && !recentlyRendered;
 
                     // Deep Search generates some guessed date URLs as a safety net. A guessed URL
                     // that merely returns HTTP 200 must not launch a full Chromium/CDP session.
@@ -1489,6 +1531,7 @@ namespace SkinClubGiveawayDesktop
                     if (allowRenderedMetadata || needsRenderedDeadline)
                     {
                         RenderedFields rendered = await FetchRenderedFieldsAsync(item.Url);
+                        item.RenderedAt = DateTime.UtcNow.ToString("o");
                         if (rendered.PromoCode != "-") item.PromoCode = rendered.PromoCode;
                         if (rendered.MinimumDeposit != "-") item.MinimumDeposit = rendered.MinimumDeposit;
 
@@ -1546,6 +1589,7 @@ namespace SkinClubGiveawayDesktop
 
                         existing.LastChecked = u.LastChecked;
                         existing.Error = u.Error;
+                        if (!string.IsNullOrWhiteSpace(u.RenderedAt)) existing.RenderedAt = u.RenderedAt;
                         if (!string.IsNullOrWhiteSpace(u.Source)) existing.Source = u.Source;
                     }
                     else
@@ -1563,6 +1607,7 @@ namespace SkinClubGiveawayDesktop
                         else if (string.IsNullOrWhiteSpace(existing.MinimumDeposit)) existing.MinimumDeposit = "-";
                         existing.Deadline = u.Deadline; existing.LastChecked = u.LastChecked;
                         existing.Source = u.Source; existing.Error = u.Error;
+                        if (!string.IsNullOrWhiteSpace(u.RenderedAt)) existing.RenderedAt = u.RenderedAt;
 
                         if (isEnded)
                         {
@@ -1612,7 +1657,8 @@ namespace SkinClubGiveawayDesktop
                     }
                     cs.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
                 }
-                SemaphoreSlim throttle = new SemaphoreSlim(8, 8);
+                KnownItems = IndexKnown(data);
+                SemaphoreSlim throttle = new SemaphoreSlim(16, 16);
                 List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
                 foreach (Candidate c in cs) tasks.Add(ValidateAsync(c, throttle));
                 GiveawayItem[] updates = tasks.Count == 0 ? new GiveawayItem[0] : await Task.WhenAll(tasks);
@@ -1622,7 +1668,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("SCAN", "Refresh complete; " + updates.Length + " pages checked");
                 return data;
             }
-            finally { ScanLock.Release(); }
+            finally { KnownItems = null; ScanLock.Release(); }
         }
 
         private static string BuildProbeUrl(string host, string slug)
@@ -1950,6 +1996,7 @@ namespace SkinClubGiveawayDesktop
                 candidates = dedup.Values.ToList();
                 ActivityLog.Write("SCAN", "Discovery complete; validating " + candidates.Count + " unique candidate pages");
                 HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
+                KnownItems = IndexKnown(data);
 
                 List<GiveawayItem> useful = new List<GiveawayItem>();
                 SemaphoreSlim throttle = new SemaphoreSlim(12, 12);
@@ -1973,7 +2020,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("SCAN", "Deep Search complete; " + useful.Count + " useful results saved");
                 return data;
             }
-            finally { ScanLock.Release(); }
+            finally { KnownItems = null; ScanLock.Release(); }
         }
 
         public static async Task<GiveawayItem> ValidateOneAsync(string creator, string url)
@@ -2504,11 +2551,11 @@ namespace SkinClubGiveawayDesktop
             // every launch instead of loading the saved classification.
             BuildUi();
             ActivityLog.Write("APP", "Ready. Browser process limit: 5 total; one rendered page at a time; 30-second page timeout.");
-            logTimer.Interval = 500;
+            logTimer.Interval = 1000;
             logTimer.Tick += delegate { UpdateLogs(); };
             logTimer.Start();
-            filterTimer.Interval = 180;
-            filterTimer.Tick += delegate { filterTimer.Stop(); Render(); };
+            filterTimer.Interval = 120;
+            filterTimer.Tick += delegate { filterTimer.Stop(); RenderView(false); };
             Render();
 
             if (automaticRefresh) Shown += async delegate { await RefreshAsync(false); };
@@ -3521,11 +3568,15 @@ namespace SkinClubGiveawayDesktop
             return sortAscending ? cmp : -cmp;
         }
 
+        private static readonly Regex TicketPairRegex = new Regex(@"^\s*([0-9,\.]+)\s*/\s*([0-9,\.]+)\s*$", RegexOptions.Compiled);
+        private static readonly Regex DepositNumberRegex = new Regex(@"[0-9]+(?:[.,][0-9]+)?", RegexOptions.Compiled);
+
         private bool TryTicketNumbers(string value, out long remaining, out long total)
         {
             remaining = 0;
             total = 0;
-            Match m = Regex.Match(value ?? "", @"^\s*([0-9,\.]+)\s*/\s*([0-9,\.]+)\s*$");
+            if (string.IsNullOrEmpty(value)) return false;
+            Match m = TicketPairRegex.Match(value);
             if (!m.Success) return false;
             string a = m.Groups[1].Value.Replace(",", "").Replace(".", "");
             string b = m.Groups[2].Value.Replace(",", "").Replace(".", "");
@@ -3544,7 +3595,7 @@ namespace SkinClubGiveawayDesktop
             // Minimum deposits are displayed with currency markers (for example
             // "$5", "10 USD", "€2.50").  Extract the numeric amount so the
             // grid sorts by value rather than by the formatted display string.
-            Match m = Regex.Match(text, @"[0-9]+(?:[.,][0-9]+)?");
+            Match m = DepositNumberRegex.Match(text);
             if (!m.Success) return false;
 
             string number = m.Value.Replace(',', '.');
@@ -3613,10 +3664,25 @@ namespace SkinClubGiveawayDesktop
             viewTitle.ForeColor = accent;
         }
 
+        // Column positions, matching the order columns are added in BuildUi().
+        private const int ColTicket = 2, ColPromo = 3, ColDeposit = 4, ColDeadline = 5, ColAction = 6;
+
         private void Render()
+        {
+            RenderView(true);
+        }
+
+        // full=false is used while typing in the search box: only the table rows change,
+        // so the header counts, theme colours and panel visibility are left alone.
+        private void RenderView(bool full)
         {
             if (IsDisposed || Disposing) return;
             filterTimer.Stop();
+            if (!full && !showingLogs && filterBox.TextLength > 0)
+            {
+                RebuildRows();
+                return;
+            }
             logsPanel.Visible = showingLogs;
             grid.Visible = !showingLogs;
             filterPanelRef.Visible = !showingLogs;
@@ -3655,14 +3721,18 @@ namespace SkinClubGiveawayDesktop
                 UpdateLogs();
                 return;
             }
+            RebuildRows();
+        }
 
+        private void RebuildRows()
+        {
             GiveawayItem selectedItem = grid.CurrentRow == null ? null : grid.CurrentRow.Tag as GiveawayItem;
             string selectedUrl = selectedItem == null ? null : selectedItem.Url;
             int firstRow = grid.FirstDisplayedScrollingRowIndex;
             List<GiveawayItem> visibleItems = CurrentItems();
             if (filterBox.TextLength > 0) viewSubtitle.Text = visibleItems.Count + " matching giveaway(s) • Esc clears search";
-            grid.SuspendLayout();
-            grid.Rows.Clear();
+            List<DataGridViewRow> built = new List<DataGridViewRow>(visibleItems.Count);
+            Color actionBack = showingJoined ? MixColor(Surface3, Danger, 0.08) : MixColor(Surface3, Success, 0.08);
             foreach (GiveawayItem i in visibleItems)
             {
                 bool ended = string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase);
@@ -3671,49 +3741,43 @@ namespace SkinClubGiveawayDesktop
                 if (!string.IsNullOrWhiteSpace(deadline) && deadline != "-") deadline = deadline.ToUpperInvariant();
                 string promoCode = string.IsNullOrWhiteSpace(i.PromoCode) ? "-" : i.PromoCode;
                 string minimumDeposit = string.IsNullOrWhiteSpace(i.MinimumDeposit) ? "-" : i.MinimumDeposit;
-                int row = grid.Rows.Add(i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", promoCode, minimumDeposit, deadline, "");
-                grid.Rows[row].Tag = i;
+                DataGridViewRow gridRow = new DataGridViewRow();
+                gridRow.CreateCells(grid, i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", promoCode, minimumDeposit, deadline, "");
+                gridRow.Tag = i;
 
                 bool activeLike = string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase);
-                grid.Rows[row].Cells["Ticket"].Style.ForeColor = Muted;
-                grid.Rows[row].Cells["PromoCode"].Style.ForeColor = promoCode == "-" ? Muted : TextColor;
-                grid.Rows[row].Cells["MinimumDeposit"].Style.ForeColor = minimumDeposit == "-" ? Muted : TextColor;
-                grid.Rows[row].Cells["Deadline"].Style.ForeColor = Muted;
-                if (ended) grid.Rows[row].DefaultCellStyle.ForeColor = Color.FromArgb(183, 193, 208);
+                DataGridViewCellCollection cells = gridRow.Cells;
+                cells[ColTicket].Style.ForeColor = Muted;
+                cells[ColPromo].Style.ForeColor = promoCode == "-" ? Muted : TextColor;
+                cells[ColDeposit].Style.ForeColor = minimumDeposit == "-" ? Muted : TextColor;
+                cells[ColDeadline].Style.ForeColor = Muted;
+                if (ended) gridRow.DefaultCellStyle.ForeColor = Color.FromArgb(183, 193, 208);
 
                 long remaining, total;
                 if (activeLike && TryTicketNumbers(i.Ticket, out remaining, out total) && total > 0)
-                {
-                    if (remaining < 100)
-                        grid.Rows[row].Cells["Ticket"].Style.ForeColor = PriorityRed;
-                    else if (remaining < 250)
-                        grid.Rows[row].Cells["Ticket"].Style.ForeColor = PriorityYellow;
-                    else
-                        grid.Rows[row].Cells["Ticket"].Style.ForeColor = PriorityGreen;
-                }
+                    cells[ColTicket].Style.ForeColor = remaining < 100 ? PriorityRed : (remaining < 250 ? PriorityYellow : PriorityGreen);
 
                 DateTime due;
                 if (activeLike && TryDeadlineDate(i, out due))
                 {
                     double days = (due.Date - DateTime.Now.Date).TotalDays;
-                    if (days <= 2)
-                        grid.Rows[row].Cells["Deadline"].Style.ForeColor = PriorityRed;
-                    else if (days <= 7)
-                        grid.Rows[row].Cells["Deadline"].Style.ForeColor = PriorityYellow;
-                    else
-                        grid.Rows[row].Cells["Deadline"].Style.ForeColor = PriorityGreen;
+                    cells[ColDeadline].Style.ForeColor = days <= 2 ? PriorityRed : (days <= 7 ? PriorityYellow : PriorityGreen);
                 }
 
-
-                if (showingJoined)
-                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Danger, 0.08);
-                else
-                    grid.Rows[row].Cells["JoinedAction"].Style.BackColor = MixColor(Surface3, Success, 0.08);
+                cells[ColAction].Style.BackColor = actionBack;
+                built.Add(gridRow);
             }
+
+            grid.SuspendLayout();
+            grid.Rows.Clear();
+            if (built.Count > 0) grid.Rows.AddRange(built.ToArray());
             UpdateSortGlyph();
-            foreach (DataGridViewRow row in grid.Rows)
-                if (string.Equals(((GiveawayItem)row.Tag).Url, selectedUrl, StringComparison.OrdinalIgnoreCase))
-                { grid.CurrentCell = row.Cells[0]; break; }
+            if (selectedUrl != null)
+            {
+                foreach (DataGridViewRow row in grid.Rows)
+                    if (string.Equals(((GiveawayItem)row.Tag).Url, selectedUrl, StringComparison.OrdinalIgnoreCase))
+                    { grid.CurrentCell = row.Cells[0]; break; }
+            }
             if (firstRow >= 0 && grid.Rows.Count > 0)
                 grid.FirstDisplayedScrollingRowIndex = Math.Min(firstRow, grid.Rows.Count - 1);
             grid.ResumeLayout();
