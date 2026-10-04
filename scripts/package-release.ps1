@@ -30,7 +30,7 @@ try {
     if ($metadata.FileVersion -ne "$version.0" -or $metadata.ProductVersion -ne $version) { throw 'Executable version mismatch' }
     # Keep run.bat's executable identical to the release download.
     Copy-Item -LiteralPath $exe -Destination (Join-Path $repo 'SkinClubGWFinder.exe') -Force
-    foreach ($name in @('README_FIRST.txt', 'README.md', 'CHANGELOG.md', 'VERSION.txt', 'SkinClubGWFinder.ico', 'run.bat')) {
+    foreach ($name in @('README.md', 'CHANGELOG.md', 'VERSION.txt', 'SkinClubGWFinder.ico', 'run.bat')) {
         Copy-Item -LiteralPath (Join-Path $source $name) -Destination $portable
     }
     Copy-Item -LiteralPath (Join-Path $source "releases/$tag.md") -Destination (Join-Path $output 'RELEASE_NOTES.md') -Force
@@ -52,9 +52,9 @@ try {
 Nothing has been published, pushed, or tagged by the packaging script.
 
 1. Commit and push the release changes to your repository first. Include Program.cs,
-   BrowserRuntime.cs, VERSION.txt, README_FIRST.txt, README.md, CHANGELOG.md,
+   BrowserRuntime.cs, VERSION.txt, README.md, CHANGELOG.md,
    releases/v1.4.0.md, scripts/package-release.ps1, .gitignore, and any other pending
-   source/build/test changes. Do not commit dist/ or the executable.
+   source/build/test changes. Do not commit dist/.
    If you use the source ZIP to update the repository, extract its CONTENTS into the
    repository root; do not upload the ZIP itself as a substitute for updating source.
 2. Open https://github.com/Smokianlord/SkinClub-GW-Finder/releases/new
