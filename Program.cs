@@ -22,9 +22,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("SkinClub GW Finder")]
 [assembly: AssemblyProduct("SkinClub GW Finder")]
 [assembly: AssemblyDescription("SkinClub creator giveaway monitor")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
-[assembly: AssemblyInformationalVersion("1.3.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyInformationalVersion("1.4.0")]
 
 namespace SkinClubGiveawayDesktop
 {
@@ -304,7 +304,8 @@ namespace SkinClubGiveawayDesktop
             @"(?:tickets?\s*(?:left|remaining|restantes)?|tickets?\s+disponibles|bilhetes?\s+(?:restantes|dispon[ií]veis)|v[eé]\s*(?:c[oò]n\s+l[aạ]i|con\s+lai))\s*[:\-]?\s*([\d.,]+)\s*/\s*([\d.,]+)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex DeadlineLineRegex = new Regex(
-            @"^[ \t]*(?:time[ \t]+to[ \t]+completion|time[ \t]+remaining|tiempo[ \t]+restante|tempo[ \t]+restante|th(?:ờ|o)i[ \t]+gian[ \t]+c(?:ò|o)n[ \t]+l(?:ạ|a)i|deadline|ends?[ \t]+in|ending[ \t]+in)[ \t]*[:\-]?[ \t]*([^\r\n|]{0,80})[ \t]*$",
+            @"^[ \t]*(?:time[ \t]+to[ \t]+completion|time[ \t]+remaining|tiempo[ \t]+restante|tempo[ \t]+restante|th(?:ờ|o)i[ \t]+gian[ \t]+c(?:ò|o)n[ \t]+l(?:ạ|a)i|deadline|ends?[ \t]+in|ending[ \t]+in)[ \t]*[:\-]?[ \t]*([^
+|]{0,80})[ \t]*$",
             RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
         private static readonly Regex ExactEndedValueRegex = new Regex(
             @"^\s*(?:end|ended|fin|finished|k[eế]t\s*th[uú]c|ket\s*thuc|cerrado|terminado|finalizado|encerrado|conclu[ií]do)\s*[.!]*\s*$",
@@ -515,7 +516,8 @@ namespace SkinClubGiveawayDesktop
             @"(?:utm_promo|promo_code|promocode)\s*=\s*([A-Za-z0-9][A-Za-z0-9_\-]{2,63})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex ParticipationStepRegex = new Regex(
-            @"(?:replenish|top[ \t-]*up|deposit|recharge)[\s\S]{0,120}?(?:balance|account)?[\s\S]{0,60}?(?:from|minimum(?:\s+deposit)?(?:\s+of)?|at\s+least)\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])[\s\S]{0,100}?(?:promo(?:tional)?[\s_\-]*code|promocode|c[oó]digo\s*(?:promocional|promo)?)[ \t\r\n:=-]*([A-Za-z0-9][A-Za-z0-9_\-]{2,63})",
+            @"(?:replenish|top[ \t-]*up|deposit|recharge)[\s\S]{0,120}?(?:balance|account)?[\s\S]{0,60}?(?:from|minimum(?:\s+deposit)?(?:\s+of)?|at\s+least)\s*((?:[$€£]\s*)?[0-9]+(?:[.,][0-9]{1,2})?\s*(?:USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT)?|[0-9]+(?:[.,][0-9]{1,2})?\s*[$€£])[\s\S]{0,100}?(?:promo(?:tional)?[\s_\-]*code|promocode|c[oó]digo\s*(?:promocional|promo)?)[ \t
+:=-]*([A-Za-z0-9][A-Za-z0-9_\-]{2,63})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex PromoCodeRegex = new Regex(
             @"(?:promo(?:tional)?[\s_\-]*code|promocode|special[\s_\-]*code|code[\s_\-]*promo|c[oó]digo\s*(?:promocional|promo)?|use\s+(?:promo[\s_\-]*)?code|enter\s+(?:promo[\s_\-]*)?code)\s*(?:(?:for\s+participation|to\s+participate|for\s+the\s+giveaway)\s*)?(?:[:#=\-]|\bis\b)?\s*[""']?([A-Za-z0-9][A-Za-z0-9_\-]{1,63})",
@@ -1237,9 +1239,13 @@ namespace SkinClubGiveawayDesktop
             // "Replenish your balance from $8 with promo code LP-..."
             // This deliberately comes before generic Skin.Club promo links because
             // the page can also contain a separate "Special Prize" discount code.
-            Match step = ParticipationStepRegex.Match(decoded);
-            if (step.Success)
+            // Raw HTML puts tags between the words and the code ("promo code <br> <b>LP-X</b>"),
+            // so also try the text with tags removed.
+            string flat = Regex.Replace(decoded, @"<[^>]+>", " ");
+            foreach (string source in new string[] { flat, decoded })
             {
+                Match step = ParticipationStepRegex.Match(source);
+                if (!step.Success) continue;
                 string code = NormalizePromoCode(step.Groups[2].Value);
                 if (code != "-") return code;
             }
@@ -1251,6 +1257,10 @@ namespace SkinClubGiveawayDesktop
             {
                 string code = NormalizePromoCode(query.Groups[1].Value);
                 if (code == "-") continue;
+                // Skip the separate "discount promocode / special bonus" prize code; only the
+                // STEP 2 entry code counts as the giveaway promocode.
+                string before = decoded.Substring(Math.Max(0, query.Index - 500), Math.Min(500, query.Index));
+                if (Regex.IsMatch(before, @"discount\s+promo|special\s+(?:bonus|prize)", RegexOptions.IgnoreCase)) continue;
                 if (code.StartsWith("LP-", StringComparison.OrdinalIgnoreCase)) return code;
                 if (firstQueryCode == "-") firstQueryCode = code;
             }
@@ -2103,12 +2113,30 @@ namespace SkinClubGiveawayDesktop
                 (int)Math.Round(a.B * (1.0 - t) + b.B * t));
         }
 
+        public static Rectangle Draw3D(Graphics g, Size size, Color top, Color bottom, Color border, bool pressed)
+        {
+            Rectangle shadowRect = new Rectangle(2, 5, Math.Max(1, size.Width - 5), Math.Max(1, size.Height - 7));
+            using (GraphicsPath sp = RoundPath(shadowRect, 10))
+            using (SolidBrush sb = new SolidBrush(Color.FromArgb(90, 0, 0, 0)))
+                g.FillPath(sb, sp);
+            Rectangle face = new Rectangle(1, pressed ? 3 : 1, Math.Max(1, size.Width - 4), Math.Max(1, size.Height - 7));
+            using (GraphicsPath path = RoundPath(face, 10))
+            using (LinearGradientBrush fill = new LinearGradientBrush(face, top, bottom, LinearGradientMode.Vertical))
+            using (Pen pen = new Pen(border))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(pen, path);
+            }
+            return face;
+        }
+
         public const TextFormatFlags Single = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter;
     }
 
     public enum UiButtonKind { Ghost, Primary, Tab }
 
-    // Flat, anti-aliased button used for actions and for the Active / Joined / History / Logs tabs.
+    // Raised "3D" button: soft drop shadow, vertical gradient face, and a press-down offset.
+    // Used for every action and for the Active / Joined / History / Logs navigation.
     public class UiButton : Button
     {
         private static readonly Font BadgeFont = new Font("Segoe UI Semibold", 8F);
@@ -2117,10 +2145,12 @@ namespace SkinClubGiveawayDesktop
         private bool hover;
         private bool pressed;
         public UiButtonKind Kind { get; private set; }
+        public Color AccentColor { get; set; }
 
         public UiButton(UiButtonKind kind)
         {
             Kind = kind;
+            AccentColor = Ui.Accent;
             FlatStyle = FlatStyle.Flat;
             FlatAppearance.BorderSize = 0;
             UseVisualStyleBackColor = false;
@@ -2128,7 +2158,7 @@ namespace SkinClubGiveawayDesktop
             Cursor = Cursors.Hand;
             Font = new Font("Segoe UI Semibold", 9.5F);
             ForeColor = Ui.Text;
-            Height = kind == UiButtonKind.Tab ? 44 : 36;
+            Height = 44;
             Margin = new Padding(0);
         }
 
@@ -2136,7 +2166,7 @@ namespace SkinClubGiveawayDesktop
         {
             UiButton b = new UiButton(kind);
             b.Text = text;
-            if (kind != UiButtonKind.Tab) b.Width = width;
+            if (kind != UiButtonKind.Tab || width > 0) b.Width = width;
             return b;
         }
 
@@ -2145,14 +2175,14 @@ namespace SkinClubGiveawayDesktop
 
         private int BadgeWidth()
         {
-            return Math.Max(22, TextRenderer.MeasureText(badge ?? "", BadgeFont, new Size(1000, 40), TextFormatFlags.NoPadding).Width + 12);
+            return Math.Max(24, TextRenderer.MeasureText(badge ?? "", BadgeFont, new Size(1000, 40), TextFormatFlags.NoPadding).Width + 14);
         }
 
         public void FitToContent()
         {
             if (Kind != UiButtonKind.Tab) return;
-            int w = 14 + TextRenderer.MeasureText(Text ?? "", Font, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
-            if (!string.IsNullOrEmpty(badge)) w += 8 + BadgeWidth();
+            int w = 40 + TextRenderer.MeasureText(Text ?? "", Font, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
+            if (!string.IsNullOrEmpty(badge)) w += 10 + BadgeWidth();
             Width = w;
         }
 
@@ -2170,64 +2200,65 @@ namespace SkinClubGiveawayDesktop
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Parent == null ? Ui.Bg : Parent.BackColor);
-            if (Kind == UiButtonKind.Tab) { PaintTab(g); return; }
 
-            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
-            Color fill, border, fore;
+            Color top, bottom, border, fore = Ui.Text;
             if (Kind == UiButtonKind.Primary)
             {
-                fill = pressed ? Ui.AccentDark : (hover ? Ui.AccentHover : Ui.Accent);
-                border = fill;
+                top = Color.FromArgb(126, 112, 255);
+                bottom = Color.FromArgb(86, 72, 215);
+                border = Color.FromArgb(155, 145, 255);
                 fore = Color.White;
+            }
+            else if (selected)
+            {
+                top = Ui.Mix(Ui.Surface3, AccentColor, 0.62);
+                bottom = Ui.Mix(Ui.Bg, AccentColor, 0.30);
+                border = Ui.Mix(AccentColor, Color.White, 0.14);
             }
             else
             {
-                fill = pressed ? Ui.Surface : (hover ? Ui.Surface3 : Ui.Surface2);
-                border = hover ? Ui.LineStrong : Ui.Line;
-                fore = Ui.Text;
+                top = Color.FromArgb(43, 55, 82);
+                bottom = Color.FromArgb(24, 33, 52);
+                border = Color.FromArgb(66, 82, 112);
+                if (Kind == UiButtonKind.Tab) fore = Ui.TextSoft;
+            }
+            if (hover && Enabled)
+            {
+                top = Ui.Mix(top, Color.White, 0.10);
+                bottom = Ui.Mix(bottom, Color.White, 0.05);
             }
             if (!Enabled)
             {
-                fill = Ui.Mix(fill, Ui.Bg, 0.55);
-                border = Ui.Mix(border, Ui.Bg, 0.55);
-                fore = Ui.Muted;
+                top = Ui.Mix(top, Color.FromArgb(80, 84, 94), 0.55);
+                bottom = Ui.Mix(bottom, Color.FromArgb(58, 62, 72), 0.55);
+                border = Ui.Mix(border, Color.Gray, 0.55);
+                fore = Color.FromArgb(145, 153, 168);
             }
-            using (GraphicsPath path = Ui.RoundPath(r, 8))
-            using (SolidBrush b = new SolidBrush(fill))
-            using (Pen p = new Pen(border))
-            {
-                g.FillPath(b, path);
-                g.DrawPath(p, path);
-            }
-            if (Focused && ShowFocusCues)
-            {
-                using (GraphicsPath ring = Ui.RoundPath(new Rectangle(2, 2, Width - 5, Height - 5), 6))
-                using (Pen p = new Pen(Color.FromArgb(160, Ui.AccentHover)))
-                    g.DrawPath(p, ring);
-            }
-            TextRenderer.DrawText(g, Text, Font, new Rectangle(0, 0, Width, Height), fore,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-        }
 
-        private void PaintTab(Graphics g)
-        {
-            Color fore = selected ? Ui.Text : (hover ? Ui.TextSoft : Ui.Muted);
-            int textWidth = TextRenderer.MeasureText(Text ?? "", Font, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
-            Rectangle textRect = new Rectangle(5, 0, textWidth + 2, Height - 2);
-            TextRenderer.DrawText(g, Text, Font, textRect, fore, Ui.Single);
-            if (!string.IsNullOrEmpty(badge))
+            Rectangle face = Ui.Draw3D(g, new Size(Width, Height), top, bottom, border, pressed);
+            if (Focused && ShowFocusCues)
+                ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(face, -5, -5), fore, bottom);
+
+            if (Kind == UiButtonKind.Tab && !string.IsNullOrEmpty(badge))
             {
+                int textWidth = TextRenderer.MeasureText(Text ?? "", Font, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
                 int bw = BadgeWidth();
-                Rectangle pill = new Rectangle(textRect.Right + 8, (Height - 2 - 18) / 2, bw, 18);
+                int total = textWidth + 10 + bw;
+                int x = face.X + (face.Width - total) / 2;
+                TextRenderer.DrawText(g, Text, Font, new Rectangle(x, face.Y, textWidth + 2, face.Height), fore,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+                Rectangle pill = new Rectangle(x + textWidth + 10, face.Y + (face.Height - 18) / 2, bw, 18);
                 using (GraphicsPath path = Ui.RoundPath(pill, 9))
-                using (SolidBrush b = new SolidBrush(selected ? Color.FromArgb(70, Ui.Accent) : Ui.Surface3))
+                using (SolidBrush b = new SolidBrush(Color.FromArgb(selected ? 90 : 120, 8, 12, 20)))
                     g.FillPath(b, path);
-                TextRenderer.DrawText(g, badge, BadgeFont, pill, selected ? Ui.AccentHover : Ui.Muted,
+                TextRenderer.DrawText(g, badge, BadgeFont, pill, selected ? Color.White : Ui.TextSoft,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
             }
-            if (selected)
-                using (SolidBrush b = new SolidBrush(Ui.Accent))
-                    g.FillRectangle(b, 0, Height - 2, Width, 2);
+            else
+            {
+                TextRenderer.DrawText(g, Text, Font, face, fore,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+            }
         }
     }
 
@@ -2242,6 +2273,8 @@ namespace SkinClubGiveawayDesktop
         private string placeholder = "";
         private Rectangle clearRect = Rectangle.Empty;
         public TextBox Input { get; private set; }
+        // When true the field leaves room under it for the 3D buttons' shadow so heights line up.
+        public bool ReserveShadow { get; set; }
 
         public TextField(bool withSearchIcon)
         {
@@ -2277,8 +2310,9 @@ namespace SkinClubGiveawayDesktop
             int right = 34;
             Input.Left = left;
             Input.Width = Math.Max(10, Width - left - right);
-            Input.Top = Math.Max(0, (Height - Input.Height) / 2);
-            clearRect = new Rectangle(Width - 30, (Height - 22) / 2, 22, 22);
+            int faceTop = ReserveShadow ? 1 : 0, faceHeight = ReserveShadow ? Height - 7 : Height;
+            Input.Top = faceTop + Math.Max(0, (faceHeight - Input.Height) / 2);
+            clearRect = new Rectangle(Width - 30, faceTop + (faceHeight - 22) / 2, 22, 22);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -2293,8 +2327,8 @@ namespace SkinClubGiveawayDesktop
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Parent == null ? Ui.Bg : Parent.BackColor);
-            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (GraphicsPath path = Ui.RoundPath(r, 8))
+            Rectangle r = ReserveShadow ? new Rectangle(0, 1, Width - 1, Height - 8) : new Rectangle(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath path = Ui.RoundPath(r, 10))
             using (SolidBrush b = new SolidBrush(Ui.Surface2))
             using (Pen p = new Pen(focused ? Ui.Accent : Ui.Line, focused ? 1.5F : 1F))
             {
@@ -2304,7 +2338,7 @@ namespace SkinClubGiveawayDesktop
             Color icon = focused ? Ui.AccentHover : Ui.Muted;
             if (searchIcon)
             {
-                int cy = Height / 2;
+                int cy = r.Y + r.Height / 2;
                 using (Pen p = new Pen(icon, 1.7F))
                 {
                     p.StartCap = LineCap.Round;
@@ -2349,13 +2383,14 @@ namespace SkinClubGiveawayDesktop
         private bool hover;
         private int selectedIndex = -1;
         private readonly List<object> items = new List<object>();
+        private ContextMenuStrip menu;
         public event EventHandler SelectedIndexChanged;
 
         public UiPicker()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Cursor = Cursors.Hand;
-            Height = 36;
+            Height = 44;
             Font = new Font("Segoe UI", 9.5F);
             TabStop = true;
         }
@@ -2385,7 +2420,9 @@ namespace SkinClubGiveawayDesktop
 
         private void ShowMenu()
         {
-            ContextMenuStrip menu = new ContextMenuStrip();
+            // The previous menu is released only now: disposing it while its Click handler is still pending crashes.
+            if (menu != null) menu.Dispose();
+            menu = new ContextMenuStrip();
             menu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors());
             menu.BackColor = Ui.Surface2;
             menu.ForeColor = Ui.Text;
@@ -2401,8 +2438,7 @@ namespace SkinClubGiveawayDesktop
                 item.Click += delegate { SelectedIndex = index; };
                 menu.Items.Add(item);
             }
-            menu.Closed += delegate { menu.Dispose(); };
-            menu.Show(this, new Point(0, Height + 4));
+            menu.Show(this, new Point(0, Height - 2));
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -2410,27 +2446,21 @@ namespace SkinClubGiveawayDesktop
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Parent == null ? Ui.Bg : Parent.BackColor);
-            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (GraphicsPath path = Ui.RoundPath(r, 8))
-            using (SolidBrush b = new SolidBrush(hover ? Ui.Surface3 : Ui.Surface2))
-            using (Pen p = new Pen(hover || Focused ? Ui.LineStrong : Ui.Line))
-            {
-                g.FillPath(b, path);
-                g.DrawPath(p, path);
-            }
+            Color top = Color.FromArgb(43, 55, 82), bottom = Color.FromArgb(24, 33, 52);
+            if (hover) { top = Ui.Mix(top, Color.White, 0.10); bottom = Ui.Mix(bottom, Color.White, 0.05); }
+            Rectangle face = Ui.Draw3D(g, new Size(Width, Height), top, bottom, Color.FromArgb(66, 82, 112), false);
             object current = SelectedItem;
-            TextRenderer.DrawText(g, current == null ? "" : current.ToString(), Font, new Rectangle(12, 0, Width - 34, Height), Ui.TextSoft, Ui.Single);
-            using (Pen p = new Pen(Ui.Muted, 1.6F))
+            TextRenderer.DrawText(g, current == null ? "" : current.ToString(), Font, new Rectangle(face.X + 14, face.Y, face.Width - 40, face.Height), Ui.Text, Ui.Single);
+            using (Pen p = new Pen(Ui.TextSoft, 1.6F))
             {
                 p.StartCap = LineCap.Round;
                 p.EndCap = LineCap.Round;
-                int cx = Width - 16, cy = Height / 2;
+                int cx = face.Right - 16, cy = face.Y + face.Height / 2;
                 g.DrawLine(p, cx - 4, cy - 2, cx, cy + 2);
                 g.DrawLine(p, cx, cy + 2, cx + 4, cy - 2);
             }
         }
     }
-
     // Thin progress strip shown above the table while a scan is running.
     public class ScanStrip : Control
     {
@@ -2525,10 +2555,10 @@ namespace SkinClubGiveawayDesktop
             Controls.Add(urlField);
 
             UiButton cancel = UiButton.Create("Cancel", UiButtonKind.Ghost, 96);
-            cancel.Location = new Point(28 + 504 - 96 - 12 - 140, 274);
+            cancel.Location = new Point(28 + 504 - 96 - 12 - 140, 268);
             cancel.DialogResult = DialogResult.Cancel;
             UiButton add = UiButton.Create("Validate and add", UiButtonKind.Primary, 140);
-            add.Location = new Point(28 + 504 - 140, 274);
+            add.Location = new Point(28 + 504 - 140, 268);
             add.DialogResult = DialogResult.OK;
             cancel.BackColor = add.BackColor = Ui.Surface;
             Controls.Add(cancel);
@@ -2814,7 +2844,7 @@ namespace SkinClubGiveawayDesktop
             Text = Program.DisplayTitle;
             Width = 1240;
             Height = 800;
-            MinimumSize = new Size(1100, 700);
+            MinimumSize = new Size(1180, 720);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Bg;
             ForeColor = TextColor;
@@ -2942,11 +2972,11 @@ namespace SkinClubGiveawayDesktop
             root.ColumnCount = 1;
             root.RowCount = 5;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54F));
             Controls.Add(root);
 
             // ---- Header: brand on the left, primary actions on the right ----
@@ -2971,7 +3001,7 @@ namespace SkinClubGiveawayDesktop
 
             PictureBox logo = new PictureBox();
             logo.Size = new Size(36, 36);
-            logo.Margin = new Padding(0, 8, 12, 0);
+            logo.Margin = new Padding(0, 12, 12, 0);
             logo.SizeMode = PictureBoxSizeMode.Zoom;
             try { logo.Image = Icon.ExtractAssociatedIcon(Application.ExecutablePath).ToBitmap(); } catch { }
             brand.Controls.Add(logo);
@@ -2979,7 +3009,7 @@ namespace SkinClubGiveawayDesktop
             Label title = new Label();
             title.Text = "SkinClub GW Finder";
             title.AutoSize = true;
-            title.Margin = new Padding(0, 10, 0, 0);
+            title.Margin = new Padding(0, 14, 0, 0);
             title.Font = new Font("Segoe UI Semibold", 15F);
             title.ForeColor = TextColor;
             brand.Controls.Add(title);
@@ -2987,7 +3017,7 @@ namespace SkinClubGiveawayDesktop
             Label version = new Label();
             version.Text = "v" + typeof(Program).Assembly.GetName().Version.ToString(3);
             version.AutoSize = true;
-            version.Margin = new Padding(10, 17, 0, 0);
+            version.Margin = new Padding(10, 21, 0, 0);
             version.Font = new Font("Segoe UI", 9F);
             version.ForeColor = Muted;
             brand.Controls.Add(version);
@@ -3005,7 +3035,7 @@ namespace SkinClubGiveawayDesktop
             addButton = MakeHeaderButton("Add link", 96, false);
             refreshButton = MakeHeaderButton("Refresh", 92, false);
             deepButton = MakeHeaderButton("Deep Search", 124, true);
-            addButton.Margin = refreshButton.Margin = deepButton.Margin = new Padding(10, 0, 0, 0);
+            addButton.Margin = refreshButton.Margin = deepButton.Margin = new Padding(8, 0, 0, 0);
             actions.Controls.Add(addButton);
             actions.Controls.Add(refreshButton);
             actions.Controls.Add(deepButton);
@@ -3021,13 +3051,8 @@ namespace SkinClubGiveawayDesktop
             nav.ColumnCount = 2;
             nav.RowCount = 1;
             nav.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            nav.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 470F));
+            nav.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 480F));
             nav.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            nav.Paint += delegate(object s, PaintEventArgs pe)
-            {
-                using (Pen p = new Pen(Line))
-                    pe.Graphics.DrawLine(p, 0, nav.Height - 1, nav.Width, nav.Height - 1);
-            };
             root.Controls.Add(nav, 0, 1);
 
             FlowLayoutPanel tabs = new FlowLayoutPanel();
@@ -3042,10 +3067,13 @@ namespace SkinClubGiveawayDesktop
             joinedButton = MakeTab("Joined");
             historyButton = MakeTab("History");
             logsButton = MakeTab("Logs");
+            ((UiButton)activeButton).AccentColor = Color.FromArgb(45, 212, 191);
+            ((UiButton)joinedButton).AccentColor = Color.FromArgb(167, 139, 250);
+            ((UiButton)historyButton).AccentColor = Color.FromArgb(245, 158, 11);
+            ((UiButton)logsButton).AccentColor = Color.FromArgb(56, 189, 248);
             tabs.Controls.Add(activeButton);
             tabs.Controls.Add(joinedButton);
             tabs.Controls.Add(historyButton);
-            tabs.Controls.Add(logsButton);
             activeButton.Click += delegate { showingHistory = false; showingJoined = false; showingLogs = false; Render(); };
             joinedButton.Click += delegate { showingJoined = true; showingHistory = false; showingLogs = false; Render(); };
             historyButton.Click += delegate { showingHistory = true; showingJoined = false; showingLogs = false; Render(); };
@@ -3060,7 +3088,7 @@ namespace SkinClubGiveawayDesktop
             TableLayoutPanel filterPanel = new TableLayoutPanel();
             filterPanelRef = filterPanel;
             filterPanel.Dock = DockStyle.Fill;
-            filterPanel.Padding = new Padding(0, 6, 0, 8);
+            filterPanel.Padding = new Padding(0);
             filterPanel.BackColor = Bg;
             filterPanel.ColumnCount = 2;
             filterPanel.RowCount = 1;
@@ -3070,15 +3098,17 @@ namespace SkinClubGiveawayDesktop
             navTools.Controls.Add(filterPanel);
 
             filterFieldBox = new UiPicker();
-            filterFieldBox.Dock = DockStyle.Fill;
-            filterFieldBox.Margin = new Padding(0, 0, 8, 0);
+            filterFieldBox.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            filterFieldBox.Margin = new Padding(0, 0, 10, 0);
             filterFieldBox.Items.AddRange(new object[] { "Creator name", "All fields", "URL", "Ticket", "Promocode", "Minimum deposit", "Deadline" });
             filterFieldBox.SelectedIndex = 0;
             filterFieldBox.SelectedIndexChanged += delegate { if (grid != null) Render(); };
             filterPanel.Controls.Add(filterFieldBox, 0, 0);
 
             TextField searchField = new TextField(true);
-            searchField.Dock = DockStyle.Fill;
+            searchField.ReserveShadow = true;
+            searchField.Height = 44;
+            searchField.Anchor = AnchorStyles.Left | AnchorStyles.Right;
             searchField.Margin = new Padding(0);
             searchField.Placeholder = "Search giveaways   (Ctrl+F)";
             filterBox = searchField.Input;
@@ -3097,21 +3127,21 @@ namespace SkinClubGiveawayDesktop
             logActions = new FlowLayoutPanel();
             logActions.Dock = DockStyle.Fill;
             logActions.FlowDirection = FlowDirection.RightToLeft;
-            logActions.Padding = new Padding(0, 8, 0, 0);
+            logActions.Padding = new Padding(0, 6, 0, 0);
             logActions.BackColor = Bg;
             logActions.Visible = false;
             Button copyLogs = MakeHeaderButton("Copy logs", 100, false);
-            copyLogs.Margin = new Padding(10, 0, 0, 0);
+            copyLogs.Margin = new Padding(8, 0, 0, 0);
             copyLogs.Click += delegate
             {
                 try { if (logText.TextLength > 0) Clipboard.SetText(logText.Text); }
                 catch { scanStatus.Text = "Clipboard is busy - try again"; }
             };
             Button clearLogs = MakeHeaderButton("Clear", 80, false);
-            clearLogs.Margin = new Padding(10, 0, 0, 0);
+            clearLogs.Margin = new Padding(8, 0, 0, 0);
             clearLogs.Click += delegate { ActivityLog.Clear(); UpdateLogs(); };
-            logActions.Controls.Add(clearLogs);
             logActions.Controls.Add(copyLogs);
+            logActions.Controls.Add(clearLogs);
             navTools.Controls.Add(logActions);
 
             // ---- Context line: what this view shows ----
@@ -3221,13 +3251,13 @@ namespace SkinClubGiveawayDesktop
             DataGridViewTextBoxColumn ticket = new DataGridViewTextBoxColumn();
             ticket.Name = "Ticket";
             ticket.HeaderText = "TICKETS";
-            ticket.Width = 156;
+            ticket.Width = 176;
             ticket.SortMode = DataGridViewColumnSortMode.Programmatic;
 
             DataGridViewTextBoxColumn promo = new DataGridViewTextBoxColumn();
             promo.Name = "PromoCode";
             promo.HeaderText = "PROMOCODE";
-            promo.Width = 210;
+            promo.Width = 250;
             promo.SortMode = DataGridViewColumnSortMode.Programmatic;
 
             DataGridViewTextBoxColumn minimumDeposit = new DataGridViewTextBoxColumn();
@@ -3239,7 +3269,7 @@ namespace SkinClubGiveawayDesktop
             DataGridViewTextBoxColumn deadline = new DataGridViewTextBoxColumn();
             deadline.Name = "Deadline";
             deadline.HeaderText = "DEADLINE";
-            deadline.Width = 170;
+            deadline.Width = 150;
             deadline.SortMode = DataGridViewColumnSortMode.Programmatic;
 
             DataGridViewButtonColumn joinedAction = MakeIconColumn("JoinedAction", 56);
@@ -3301,17 +3331,22 @@ namespace SkinClubGiveawayDesktop
             status.Dock = DockStyle.Fill;
             status.Margin = new Padding(0);
             status.BackColor = Bg;
-            status.ColumnCount = 3;
+            status.ColumnCount = 4;
             status.RowCount = 1;
-            status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 18F));
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 26F));
             status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             status.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             status.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(status, 0, 4);
 
+            logsButton.Anchor = AnchorStyles.Left;
+            logsButton.Margin = new Padding(0, 0, 8, 0);
+            status.Controls.Add(logsButton, 0, 0);
+
             statusDot = new Panel();
             statusDot.Size = new Size(10, 10);
-            statusDot.Anchor = AnchorStyles.None;
+            statusDot.Anchor = AnchorStyles.Right;
             statusDot.Margin = new Padding(0);
             statusDot.Paint += delegate(object s, PaintEventArgs pe)
             {
@@ -3320,7 +3355,7 @@ namespace SkinClubGiveawayDesktop
                 using (SolidBrush b = new SolidBrush(statusDotColor))
                     pe.Graphics.FillEllipse(b, 1, 1, 8, 8);
             };
-            status.Controls.Add(statusDot, 0, 0);
+            status.Controls.Add(statusDot, 1, 0);
 
             scanStatus = new Label();
             scanStatus.Dock = DockStyle.Fill;
@@ -3330,7 +3365,7 @@ namespace SkinClubGiveawayDesktop
             scanStatus.TextAlign = ContentAlignment.MiddleLeft;
             scanStatus.AutoEllipsis = true;
             scanStatus.Text = "Ready";
-            status.Controls.Add(scanStatus, 1, 0);
+            status.Controls.Add(scanStatus, 2, 0);
 
             lastCheck = new Label();
             lastCheck.AutoSize = true;
@@ -3339,7 +3374,7 @@ namespace SkinClubGiveawayDesktop
             lastCheck.ForeColor = Muted;
             lastCheck.Font = new Font("Segoe UI", 9F);
             lastCheck.Text = "Last checked: never";
-            status.Controls.Add(lastCheck, 2, 0);
+            status.Controls.Add(lastCheck, 3, 0);
 
             ResumeLayout(true);
         }
@@ -3365,7 +3400,7 @@ namespace SkinClubGiveawayDesktop
         private UiButton MakeTab(string text)
         {
             UiButton tab = UiButton.Create(text, UiButtonKind.Tab, 0);
-            tab.Margin = new Padding(0, 0, 18, 0);
+            tab.Margin = new Padding(0, 0, 8, 0);
             return tab;
         }
 
@@ -3545,9 +3580,9 @@ namespace SkinClubGiveawayDesktop
                             break;
                         }
                         Color tone = TicketColor(item);
-                        Rectangle numbers = new Rectangle(text.X, text.Y, 84, text.Height);
+                        Rectangle numbers = new Rectangle(text.X, text.Y, 90, text.Height);
                         TextRenderer.DrawText(g, value, cellBold, numbers, tone, Ui.Single);
-                        int barX = text.X + 88, barW = Math.Min(36, text.Right - barX);
+                        int barX = text.X + 94, barW = Math.Min(40, text.Right - barX);
                         if (barW > 12)
                         {
                             int cy = cb.Y + (cb.Height - 1) / 2;
@@ -3582,29 +3617,18 @@ namespace SkinClubGiveawayDesktop
                     break;
                 case "Deadline":
                     {
-                        if (missing) { TextRenderer.DrawText(g, "–", cellFont, text, Ui.Muted, Ui.Single); break; }
-                        Color tone = Ui.Muted;
-                        string relative = null;
+                        if (missing) { TextRenderer.DrawText(g, "\u2013", cellFont, text, Ui.Muted, Ui.Single); break; }
+                        Color tone = fore;
                         DateTime due;
                         if (!ended && item != null && TryDeadlineDate(item, out due))
                         {
-                            int days = (int)(due.Date - DateTime.Now.Date).TotalDays;
+                            double days = (due.Date - DateTime.Now.Date).TotalDays;
                             tone = days <= 2 ? PriorityRed : (days <= 7 ? PriorityYellow : PriorityGreen);
-                            relative = days < 0 ? "ended" : (days == 0 ? "today" : (days == 1 ? "tomorrow" : "in " + days + "d"));
                         }
-                        int dotX = text.X;
-                        if (relative != null)
-                        {
-                            using (SolidBrush b = new SolidBrush(tone)) g.FillEllipse(b, dotX, cb.Y + (cb.Height - 1) / 2 - 3, 7, 7);
-                            dotX += 15;
-                        }
-                        int tw = TextRenderer.MeasureText(value, cellFont, new Size(1000, 40), TextFormatFlags.NoPadding).Width;
-                        TextRenderer.DrawText(g, value, cellFont, new Rectangle(dotX, text.Y, Math.Max(1, text.Right - dotX), text.Height), fore, Ui.Single);
-                        if (relative != null && dotX + tw + 8 < text.Right)
-                            TextRenderer.DrawText(g, relative, smallFont, new Rectangle(dotX + tw + 8, text.Y, text.Right - dotX - tw - 8, text.Height), tone, Ui.Single);
+                        else if (ended) tone = Ui.Muted;
+                        TextRenderer.DrawText(g, value, cellFont, text, tone, Ui.Single);
                         break;
-                    }
-                case "JoinedAction":
+                    }                case "JoinedAction":
                     {
                         Color tone = showingJoined ? Danger : Success;
                         bool hot = rowHot && hoverColumn == e.ColumnIndex;
@@ -4075,6 +4099,9 @@ namespace SkinClubGiveawayDesktop
                 string deadline = i.Deadline ?? "-";
                 if ((showingHistory || showingJoined) && ended && (string.IsNullOrWhiteSpace(deadline) || deadline == "-")) deadline = "Ended";
                 
+                DateTime shownDate;
+                if (DateTime.TryParse(deadline, out shownDate))
+                    deadline = shownDate.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture);
                 string promoCode = string.IsNullOrWhiteSpace(i.PromoCode) ? "-" : i.PromoCode;
                 string minimumDeposit = string.IsNullOrWhiteSpace(i.MinimumDeposit) ? "-" : i.MinimumDeposit;
                 DataGridViewRow gridRow = new DataGridViewRow();

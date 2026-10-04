@@ -1,9 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [1.4.0] - 2026-10-04
 
 - Much faster refresh: metadata already resolved for a saved giveaway (deadline, promocode, minimum deposit) is reused instead of relaunching a headless browser for every page on every refresh. Pages that still lack metadata are retried at most every 12 hours.
 - Complete interface redesign: flat dark theme, underline tabs with count badges, rounded search field with a dark field picker, 56px rows with creator avatars, ticket progress bars, promocode chips, deadline countdown, hover states, scan progress strip, status bar and dark title bar.
+- 3D buttons everywhere, interactive per-view coloured tabs, Logs moved to the bottom-left corner, deadline shows the date only, more padding and no clipped text.
+- Fixed: the wrong (discount / special bonus) promocode could be shown; the STEP 2 entry code is now used.
+- Fixed: crash (disposed ContextMenuStrip) when choosing a search filter.
 - Faster HTTP checks (16 concurrent page checks during refresh).
 - Faster browsing and searching: rows are built in one batch, searching only rebuilds the table rows, and sort comparisons use precompiled patterns.
 - Log view updates once per second instead of twice.
@@ -66,3 +69,4 @@
 - Fixed excessive CPU/RAM usage during Deep Search caused by concurrent headless Chromium fallback processes.
 - Serialized rendered-page checks, lowered scan concurrency, added short-lived render caching, and ensured spawned browser process trees are cleaned up.
 - Giveaway discovery coverage is unchanged.
+
