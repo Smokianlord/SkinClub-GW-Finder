@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.1] - 2026-10-23
 
 - Fixed: Portuguese giveaway pages show "FIM" for "ended"; the app did not know the word and a refresh reopened ended giveaways. "FIM" and the "ended" word in several other languages are now recognised, and an ended giveaway is only reopened by a real future deadline.
 - Fixed: a Join click (or an added link) made while a scan was running was overwritten when the scan finished. Scan results are now merged into the live data.

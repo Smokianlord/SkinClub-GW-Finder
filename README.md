@@ -41,7 +41,7 @@ Saved data lives in `%LOCALAPPDATA%\SkinClub GW Finder\data.json`; options are i
 
 The source is in `src/` (data store, scanner split into parsing/render/validate/discovery, UI, settings). `scripts/build.ps1` is the one place that compiles it; `BUILD_EXE.bat`, CI, the tests and the release script all call it, so new `.cs` files under `src/` are picked up automatically.
 
-Run `BUILD_EXE.bat` to compile and launch the app. Run `powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1` to create release assets without launching it. Assets and upload instructions are written to `dist/v1.5.0/`.
+Run `BUILD_EXE.bat` to compile and launch the app. Run `powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1` to create release assets without launching it. Assets and upload instructions are written to `dist/v1.5.1/`.
 
 Run `tests/run.ps1` for UI and persistence checks, `tests/run-browser.ps1` for process limits and cleanup checks, and `tests/run-live.ps1` to validate the four real September 2026 giveaway links. Live tests make network requests and can fail if those pages change or become unavailable. Tests do not modify your saved giveaways.
 
