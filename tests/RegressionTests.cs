@@ -30,6 +30,26 @@ static class RegressionTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = request, Content = new StringContent(body) });
         }
     }
+    // Fails the first N requests (by throwing, or with a status code), then serves the page.
+    sealed class FlakyHandler : HttpMessageHandler
+    {
+        readonly string body;
+        readonly HttpStatusCode? failureStatus;
+        int failuresLeft;
+        public int Calls;
+        public FlakyHandler(int failures, HttpStatusCode? failureStatus, string body) { failuresLeft = failures; this.failureStatus = failureStatus; this.body = body; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Interlocked.Increment(ref Calls);
+            if (failuresLeft > 0)
+            {
+                failuresLeft--;
+                if (failureStatus.HasValue) return Task.FromResult(new HttpResponseMessage(failureStatus.Value) { RequestMessage = request });
+                throw new HttpRequestException("simulated connection reset");
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = request, Content = new StringContent(body) });
+        }
+    }
     static int checks;
     static void Check(bool value, string message)
     {
@@ -132,6 +152,26 @@ static class RegressionTests
             new HttpClient(new FixedPageHandler("<html><body>Tickets left: 0 / 500 <a href=\"https://skin.club/?promocode=LP-XTVFAGX7QP9W\">go</a></body></html>")));
         GiveawayItem endedPage = Scanner.ValidateAsync(new Candidate("Kryoz", "https://kryoz.club/010826/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
         Check(endedPage.Status == "ended" && endedPage.PromoCode == "-", "An ended page's unrelated code is not taken as the entry code");
+
+        // A check that fails to read a page must be retried, and never mistaken for "no giveaway here".
+        string endedHtml = "<html><body>Tickets left: 0 / 500</body></html>";
+        FieldInfo clientField = typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static);
+        FlakyHandler resets = new FlakyHandler(2, null, endedHtml);
+        clientField.SetValue(null, new HttpClient(resets));
+        GiveawayItem afterResets = Scanner.ValidateAsync(new Candidate("A", "https://flaky-a.club/010926/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
+        Check(afterResets.Status == "ended" && !afterResets.Unreachable && resets.Calls == 3, "A page is found after two dropped connections");
+        FlakyHandler busy = new FlakyHandler(2, HttpStatusCode.ServiceUnavailable, endedHtml);
+        clientField.SetValue(null, new HttpClient(busy));
+        GiveawayItem afterBusy = Scanner.ValidateAsync(new Candidate("B", "https://flaky-b.club/010926/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
+        Check(afterBusy.Status == "ended" && !afterBusy.Unreachable, "A page is found after two 503 answers");
+        FlakyHandler dead = new FlakyHandler(100, null, endedHtml);
+        clientField.SetValue(null, new HttpClient(dead));
+        GiveawayItem neverReached = Scanner.ValidateAsync(new Candidate("C", "https://flaky-c.club/010926/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
+        Check(neverReached.Unreachable && neverReached.Status == "unknown" && dead.Calls == 3, "A page that never answers is flagged unreachable after three tries");
+        FlakyHandler missing = new FlakyHandler(100, HttpStatusCode.NotFound, endedHtml);
+        clientField.SetValue(null, new HttpClient(missing));
+        GiveawayItem absent = Scanner.ValidateAsync(new Candidate("D", "https://flaky-d.club/010926/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
+        Check(!absent.Unreachable && missing.Calls == 1, "A real 404 is final and is not retried");
 
         typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, new HttpClient(new RedirectHandler()));
         GiveawayItem redirected = Scanner.ValidateAsync(new Candidate("Alpha", data.Items[0].Url, "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();

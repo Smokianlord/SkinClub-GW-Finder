@@ -96,23 +96,35 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
+        // Discovery sources that could not be read (after retries) during the current Deep Search.
+        private static int discoveryFailures;
+        public static int LastDiscoveryFailures { get { return Volatile.Read(ref discoveryFailures); } }
+        // Pages that still could not be reached after every retry in the last Deep Search.
+        public static int LastUnreachable { get; private set; }
+
         private static async Task<string> GetStringSafeAsync(string url)
         {
             ActivityLog.Write("SOURCE", "Fetching " + url);
             try
             {
-                using (HttpResponseMessage r = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+                PageFetch fetched = await FetchPageAsync(url, MaxDiscoveryBytes, false);
+                if (fetched.Status < 200 || fetched.Status > 299)
                 {
-                    if (!r.IsSuccessStatusCode)
-                    { ActivityLog.Write("ERROR", "HTTP " + (int)r.StatusCode + " fetching " + url); return ""; }
-                    string content = await ReadBodyCappedAsync(r, MaxDiscoveryBytes);
-                    ActivityLog.Write("SOURCE", "Received " + content.Length + " characters from " + url);
-                    return content;
+                    ActivityLog.Write("ERROR", "HTTP " + fetched.Status + " fetching " + url);
+                    if (fetched.Status == 429 || fetched.Status >= 500) Interlocked.Increment(ref discoveryFailures);
+                    return "";
                 }
+                string content = fetched.Body ?? "";
+                ActivityLog.Write("SOURCE", "Received " + content.Length + " characters from " + url);
+                return content;
             }
-            catch (Exception ex) { ActivityLog.Write("ERROR", "Source failed: " + url + " — " + ex.Message); return ""; }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref discoveryFailures);
+                ActivityLog.Write("ERROR", "Source failed after retries: " + url + " — " + ex.Message);
+                return "";
+            }
         }
-
         private static async Task<List<Candidate>> DiscoverTelegramAsync()
         {
             List<Candidate> found = new List<Candidate>();
@@ -318,6 +330,8 @@ namespace SkinClubGiveawayDesktop
                 HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
                 KnownItems = IndexKnown(data);
                 ResetChecks(0);
+                Volatile.Write(ref discoveryFailures, 0);
+                LastUnreachable = 0;
 
                 // Page checks start immediately and overlap with the slower social/search
                 // discovery, instead of waiting for every source to finish first. Pages found
@@ -365,6 +379,27 @@ namespace SkinClubGiveawayDesktop
 
                 List<GiveawayItem> useful = new List<GiveawayItem>();
                 GiveawayItem[] updates = await Task.WhenAll(validations);
+
+                // A page that could not be read at all is not "no giveaway here". Check those again,
+                // slowly and a few at a time, before accepting that they are unreachable.
+                for (int round = 1; round <= 3; round++)
+                {
+                    List<int> failed = new List<int>();
+                    for (int i = 0; i < updates.Length; i++) if (updates[i].Unreachable) failed.Add(i);
+                    if (failed.Count == 0) break;
+                    ActivityLog.Write("SCAN", failed.Count + " pages could not be read; checking them again (round " + round + " of 3)");
+                    Interlocked.Add(ref checksTotal, failed.Count);
+                    await Task.Delay(2000 * round);
+                    SemaphoreSlim slow = new SemaphoreSlim(4, 4);
+                    List<Task<GiveawayItem>> again = new List<Task<GiveawayItem>>();
+                    foreach (int index in failed)
+                        again.Add(ValidateAsync(new Candidate(updates[index].Creator, updates[index].Url, updates[index].Source), slow));
+                    GiveawayItem[] redone = await Task.WhenAll(again);
+                    for (int k = 0; k < failed.Count; k++) updates[failed[k]] = redone[k];
+                }
+                LastUnreachable = updates.Count(delegate(GiveawayItem u) { return u.Unreachable; });
+                foreach (GiveawayItem u in updates.Where(delegate(GiveawayItem u) { return u.Unreachable; }))
+                    ActivityLog.Write("WARN", "Could not reach after retries: " + u.Url + " (" + u.Error + ")");
                 foreach (GiveawayItem u in updates)
                 {
                     string key = GiveawayKey(u.Url);

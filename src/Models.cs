@@ -36,6 +36,9 @@ namespace SkinClubGiveawayDesktop
         public string JoinedAt { get; set; }
         public string HistorySince { get; set; }
         public string RenderedAt { get; set; }
+        // Set when a check failed to read the page at all; never saved.
+        [System.Web.Script.Serialization.ScriptIgnore]
+        public bool Unreachable { get; set; }
     }
 
     public class AppData

@@ -21,6 +21,7 @@ namespace SkinClubGiveawayDesktop
         public int RenderTimeoutSeconds { get; set; }
         public int MetadataRetryHours { get; set; }
         public int ProbeConcurrency { get; set; }
+        public int PerHostConcurrency { get; set; }
         // Windows-enforced ceilings for the one browser the app runs at a time (root plus children).
         public int BrowserProcessLimit { get; set; }
         public int BrowserConcurrency { get; set; }
@@ -35,7 +36,8 @@ namespace SkinClubGiveawayDesktop
             Notifications = true;
             HistoryLatestOnly = true;
             BrowserPath = "";
-            HttpTimeoutSeconds = 8;
+            HttpTimeoutSeconds = 20;
+            PerHostConcurrency = 4;
             RenderTimeoutSeconds = 30;
             MetadataRetryHours = 12;
             ProbeConcurrency = 64;
@@ -64,6 +66,7 @@ namespace SkinClubGiveawayDesktop
             RenderTimeoutSeconds = Clamp(RenderTimeoutSeconds, 10, 120);
             MetadataRetryHours = Clamp(MetadataRetryHours, 1, 168);
             ProbeConcurrency = Clamp(ProbeConcurrency, 4, 128);
+            PerHostConcurrency = Clamp(PerHostConcurrency, 1, 16);
             BrowserProcessLimit = Clamp(BrowserProcessLimit, 5, 256);
             BrowserConcurrency = Clamp(BrowserConcurrency, 1, 16);
             BrowserMemoryLimitMB = Clamp(BrowserMemoryLimitMB, 512, 16384);

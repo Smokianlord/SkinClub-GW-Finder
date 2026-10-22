@@ -1596,9 +1596,16 @@ namespace SkinClubGiveawayDesktop
                 data = scanned;
                 Render();
                 int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
-                scanStatus.Text = "Deep Search complete  •  " + ac + " active giveaway" + (ac == 1 ? "" : "s");
-                scanStatus.ForeColor = Success;
-                await Task.Delay(2200);
+                // Never present a scan as complete if some pages or sources could not be read.
+                int unreachable = Scanner.LastUnreachable;
+                int sourceFailures = Scanner.LastDiscoveryFailures;
+                bool incomplete = unreachable > 0 || sourceFailures > 0;
+                scanStatus.Text = "Deep Search complete  •  " + ac + " active giveaway" + (ac == 1 ? "" : "s") +
+                    (unreachable > 0 ? "  •  " + unreachable + " page" + (unreachable == 1 ? "" : "s") + " could not be reached" : "") +
+                    (sourceFailures > 0 ? "  •  " + sourceFailures + " source" + (sourceFailures == 1 ? "" : "s") + " unreadable" : "") +
+                    (incomplete ? " (see Logs, run again)" : "");
+                scanStatus.ForeColor = incomplete ? Warning : Success;
+                await Task.Delay(incomplete ? 10000 : 2200);
             }
             catch (Exception ex)
             {

@@ -174,6 +174,74 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
+        private sealed class PageFetch
+        {
+            public int Status;
+            public string FinalUrl;
+            public string Body;
+        }
+
+        private const int FetchAttempts = 3;
+        private static readonly Dictionary<string, SemaphoreSlim> HostGates = new Dictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+
+        // Many checks against one site at once make it slow or drop connections, and a dropped
+        // check looks the same as "no giveaway here". Cap simultaneous requests per site.
+        private static SemaphoreSlim HostGate(string url)
+        {
+            string host = GiveawayInfo.HostKey(url);
+            lock (HostGates)
+            {
+                SemaphoreSlim gate;
+                if (!HostGates.TryGetValue(host, out gate))
+                {
+                    int limit = AppSettings.Current.PerHostConcurrency;
+                    gate = new SemaphoreSlim(limit, limit);
+                    HostGates[host] = gate;
+                }
+                return gate;
+            }
+        }
+
+        // Headers first (a 404 is rejected without downloading a body), body capped, at most a few
+        // requests per site, and failures that are not the site answering "no" (timeouts, resets,
+        // 429, 5xx) are retried with a growing pause before giving up.
+        private static async Task<PageFetch> FetchPageAsync(string url, int maxBytes, bool requireSameUrl)
+        {
+            SemaphoreSlim gate = HostGate(url);
+            await gate.WaitAsync();
+            try
+            {
+                Exception last = null;
+                for (int attempt = 1; attempt <= FetchAttempts; attempt++)
+                {
+                    bool retry = false;
+                    try
+                    {
+                        using (HttpResponseMessage r = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+                        {
+                            int code = (int)r.StatusCode;
+                            if ((code == 429 || code >= 500) && attempt < FetchAttempts) retry = true;
+                            else
+                            {
+                                PageFetch fetched = new PageFetch { Status = code, FinalUrl = r.RequestMessage.RequestUri.ToString() };
+                                // A giveaway page that redirects elsewhere is not that giveaway: skip its body.
+                                if (r.IsSuccessStatusCode && (!requireSameUrl || string.Equals(GiveawayKey(url), GiveawayKey(fetched.FinalUrl), StringComparison.OrdinalIgnoreCase)))
+                                    fetched.Body = await ReadBodyCappedAsync(r, maxBytes);
+                                return fetched;
+                            }
+                        }
+                    }
+                    catch (HttpRequestException ex) { last = ex; retry = true; }
+                    catch (TaskCanceledException ex) { last = ex; retry = true; } // HttpClient timeout
+                    catch (IOException ex) { last = ex; retry = true; }
+                    if (retry && attempt == FetchAttempts && last != null) throw last;
+                    if (retry) await Task.Delay(400 * attempt * attempt);
+                }
+                throw last ?? new IOException("No response from " + url);
+            }
+            finally { gate.Release(); }
+        }
+
         private static Dictionary<string, GiveawayItem> IndexKnown(AppData data)
         {
             Dictionary<string, GiveawayItem> map = new Dictionary<string, GiveawayItem>(StringComparer.OrdinalIgnoreCase);

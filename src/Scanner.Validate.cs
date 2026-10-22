@@ -36,25 +36,23 @@ namespace SkinClubGiveawayDesktop
                 };
                 try
                 {
-                    string html;
-                    // Headers first: a 404 or a redirect to a homepage is rejected without
-                    // downloading its body, and accepted pages are read with a size cap.
-                    using (HttpResponseMessage r = await Client.GetAsync(c.Url, HttpCompletionOption.ResponseHeadersRead))
+                    // Headers first, per-site limit, retries for timeouts and 429/5xx (see FetchPageAsync).
+                    PageFetch fetched = await FetchPageAsync(c.Url, MaxPageBytes, true);
+                    if (fetched.Status < 200 || fetched.Status > 299)
                     {
-                    if (!r.IsSuccessStatusCode)
-                    {
-                        item.Error = "HTTP " + (int)r.StatusCode;
+                        item.Error = "HTTP " + fetched.Status;
+                        // 429 and 5xx mean the site was busy, not that the page is absent.
+                        item.Unreachable = fetched.Status == 429 || fetched.Status >= 500;
                         return item;
                     }
                     // Keep the requested giveaway identity on failures and redirects.
                     // A redirect to a homepage must not orphan the saved dated entry.
-                    if (!string.Equals(GiveawayKey(c.Url), GiveawayKey(r.RequestMessage.RequestUri.ToString()), StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(GiveawayKey(c.Url), GiveawayKey(fetched.FinalUrl), StringComparison.OrdinalIgnoreCase))
                     {
                         item.Error = "Page redirected to a different giveaway or homepage";
                         return item;
                     }
-                    html = await ReadBodyCappedAsync(r, MaxPageBytes);
-                    }
+                    string html = fetched.Body;
                     ParseResult p = ParsePage(html);
                     item.Status = p.Status;
                     item.Ticket = p.Ticket;
@@ -143,6 +141,9 @@ namespace SkinClubGiveawayDesktop
                 catch (Exception ex)
                 {
                     item.Error = ex.Message.Length > 160 ? ex.Message.Substring(0, 160) : ex.Message;
+                    // The page was not read at all (timeout, connection reset, ...): never treat
+                    // this as "no giveaway here"; Deep Search retries it and reports what stays unreachable.
+                    item.Unreachable = true;
                     return item;
                 }
                 finally { ActivityLog.Write(item.Error == null ? "RESULT" : "ERROR", c.Url + " — " + item.Status + (item.Error == null ? "" : ": " + item.Error)); }
