@@ -235,6 +235,7 @@ namespace SkinClubGiveawayDesktop
             await ScanLock.WaitAsync();
             try
             {
+                phase = "Refresh: checking saved pages";
                 ActivityLog.Write("SCAN", "Refreshing saved giveaways");
                 List<Candidate> cs = new List<Candidate>();
                 foreach (GiveawayItem i in data.Items)
@@ -263,7 +264,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("SCAN", "Refresh complete; " + updates.Length + " pages checked");
                 return data;
             }
-            finally { KnownItems = null; ScanLock.Release(); }
+            finally { KnownItems = null; phase = "Idle"; ScanLock.Release(); }
         }
 
     }

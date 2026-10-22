@@ -104,6 +104,12 @@ namespace SkinClubGiveawayDesktop
 
         private static async Task<string> GetStringSafeAsync(string url)
         {
+            try { return await GetStringCoreAsync(url); }
+            finally { Interlocked.Increment(ref sourcesRead); }
+        }
+
+        private static async Task<string> GetStringCoreAsync(string url)
+        {
             ActivityLog.Write("SOURCE", "Fetching " + url);
             try
             {
@@ -326,6 +332,8 @@ namespace SkinClubGiveawayDesktop
             await ScanLock.WaitAsync();
             try
             {
+                phase = "Deep Search: reading sources and checking pages";
+                Volatile.Write(ref sourcesRead, 0);
                 ActivityLog.Write("SCAN", "Deep Search started: Telegram, YouTube, partner socials and web search");
                 HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
                 KnownItems = IndexKnown(data);
@@ -375,6 +383,7 @@ namespace SkinClubGiveawayDesktop
                 // Deep Search from depending only on the hard-coded creator list.
                 AddDiscoveredDomainProbes(discovered);
                 enqueue(discovered);
+                phase = "Deep Search: finishing page checks";
                 ActivityLog.Write("SCAN", "Discovery complete; checking " + validations.Count + " unique candidate pages");
 
                 List<GiveawayItem> useful = new List<GiveawayItem>();
@@ -387,6 +396,7 @@ namespace SkinClubGiveawayDesktop
                     List<int> failed = new List<int>();
                     for (int i = 0; i < updates.Length; i++) if (updates[i].Unreachable) failed.Add(i);
                     if (failed.Count == 0) break;
+                    phase = "Deep Search: re-checking " + failed.Count + " unreachable pages (round " + round + " of 3)";
                     ActivityLog.Write("SCAN", failed.Count + " pages could not be read; checking them again (round " + round + " of 3)");
                     Interlocked.Add(ref checksTotal, failed.Count);
                     await Task.Delay(2000 * round);
@@ -412,7 +422,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("SCAN", "Deep Search complete; " + useful.Count + " useful results saved");
                 return data;
             }
-            finally { KnownItems = null; ScanLock.Release(); }
+            finally { KnownItems = null; phase = "Idle"; ScanLock.Release(); }
         }
 
         public static async Task<GiveawayItem> ValidateOneAsync(string creator, string url)
@@ -420,7 +430,9 @@ namespace SkinClubGiveawayDesktop
             if (!DirectUrlRegex.IsMatch(url)) throw new ArgumentException("Use a direct dated creator giveaway URL, for example https://creator.club/010926/");
             SemaphoreSlim throttle = new SemaphoreSlim(1, 1);
             ResetChecks(1);
-            return await ValidateAsync(new Candidate(creator, url, "manual"), throttle);
+            phase = "Checking the added link";
+            try { return await ValidateAsync(new Candidate(creator, url, "manual"), throttle); }
+            finally { phase = "Idle"; }
         }
 
         public static void MergeOne(AppData data, GiveawayItem item)

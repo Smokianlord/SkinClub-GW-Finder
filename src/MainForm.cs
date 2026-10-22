@@ -1465,12 +1465,20 @@ namespace SkinClubGiveawayDesktop
             }
             try
             {
+                // Say what is happening, not just a process count: most of a scan is web requests, and a
+                // browser only opens for the few pages that need one, so "0 browsers" is normal in between.
                 int total = Scanner.ChecksTotal;
-                string checks = total > 0 && (scanning || Scanner.ActiveChecks > 0)
-                    ? "Page checks " + Scanner.ChecksDone + "/" + total + " (" + Scanner.ActiveChecks + " running)"
-                    : "Page checks idle";
-                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/" + BrowserProcessManager.TotalProcessCap + "  \u00b7  Queued pages " + Scanner.QueuedRenders +
-                    "  \u00b7  " + checks + "  \u00b7  Latest 2,000 events";
+                bool working = scanning || Scanner.ActiveChecks > 0;
+                List<string> parts = new List<string>();
+                parts.Add(working && Scanner.Phase != "Idle" ? Scanner.Phase : (working ? "Working" : "Idle"));
+                if (total > 0 && working)
+                    parts.Add("Pages " + Scanner.ChecksDone + "/" + total + " (" + Scanner.ActiveChecks + " running)");
+                if (working && Scanner.SourcesRead > 0 && Scanner.Phase.StartsWith("Deep Search"))
+                    parts.Add("Sources read " + Scanner.SourcesRead);
+                parts.Add("Browsers " + BrowserProcessManager.RunningBrowsers + "/" + BrowserProcessManager.MaxConcurrent +
+                    " (" + BrowserProcessManager.ActiveProcessCount + " processes)");
+                if (Scanner.QueuedRenders > 0) parts.Add("Waiting for a browser " + Scanner.QueuedRenders);
+                viewSubtitle.Text = string.Join("  \u00b7  ", parts.ToArray());
             }
             catch { viewSubtitle.Text = "Browser count unavailable — check cleanup errors below"; }
         }

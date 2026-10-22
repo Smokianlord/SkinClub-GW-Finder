@@ -134,6 +134,12 @@ namespace SkinClubGiveawayDesktop
             Volatile.Write(ref checksTotal, total);
         }
 
+        // What the scanner is doing right now, for the Logs tab ("Idle" when nothing runs).
+        private static volatile string phase = "Idle";
+        public static string Phase { get { return phase; } }
+        private static int sourcesRead;
+        public static int SourcesRead { get { return Volatile.Read(ref sourcesRead); } }
+
         private static int queuedRenders;
         public static int QueuedRenders { get { return Volatile.Read(ref queuedRenders); } }
         private static readonly object RenderCacheGate = new object();

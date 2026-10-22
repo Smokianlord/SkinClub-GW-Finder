@@ -134,6 +134,25 @@ namespace SkinClubGiveawayDesktop
             return total;
         }
 
+        private static int lastBrowsers;
+
+        // Browsers (page renders) running right now, out of MaxConcurrent.
+        public static int RunningBrowsers
+        {
+            get
+            {
+                bool taken = false;
+                try
+                {
+                    Monitor.TryEnter(Gate, 100, ref taken);
+                    if (!taken) return Volatile.Read(ref lastBrowsers);
+                    lastBrowsers = Jobs.Count;
+                    return lastBrowsers;
+                }
+                finally { if (taken) Monitor.Exit(Gate); }
+            }
+        }
+
         // Called by the UI timer. Starting a browser holds Gate briefly; the UI must never freeze
         // behind it, so fall back to the last count read.
         public static int ActiveProcessCount
