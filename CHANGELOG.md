@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.0] - 2026-10-23
 
 - Only one copy of the app can run; starting another brings the first to the front.
 - Unhandled errors are logged to `crash.log`; empty `catch` blocks now log to the Logs tab.

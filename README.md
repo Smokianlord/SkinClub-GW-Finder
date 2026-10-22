@@ -13,7 +13,8 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 - **Deep Search** across public sources, including YouTube, Telegram, web search, and known creator `.club` domains.
 - **Direct-page validation** before a giveaway is added to the tracker.
 - **Active / Joined / History workflow** for keeping giveaways organized.
-- **History limit:** keeps the 30 most recent entries by the time they entered History (falling back to last checked for older data). Excess entries are removed automatically on load and save; Joined giveaways are preserved.
+- **History:** shows each creator's latest ended giveaway (newest dated link) with its saved promocode and minimum deposit; older ones stay saved and can be shown again in Settings. The History size limit (30 by default, configurable) removes the oldest extras automatically, but never a creator's latest giveaway, and Joined giveaways are preserved.
+- **Never silently miss a giveaway:** failed or timed-out page checks are retried, requests per site are capped, and any page that still cannot be reached is re-checked and reported instead of being skipped.
 - **Joined exclusivity:** joining a giveaway removes it from Active or History and shows it only in Joined. Removing it from Joined restores it to its real Active/History state.
 - **Ticket tracking** with `remaining / total` values when available.
 - **Deadline parsing** with clean uppercase calendar dates.
@@ -40,7 +41,7 @@ Saved data lives in `%LOCALAPPDATA%\SkinClub GW Finder\data.json`; options are i
 
 The source is in `src/` (data store, scanner split into parsing/render/validate/discovery, UI, settings). `scripts/build.ps1` is the one place that compiles it; `BUILD_EXE.bat`, CI, the tests and the release script all call it, so new `.cs` files under `src/` are picked up automatically.
 
-Run `BUILD_EXE.bat` to compile and launch the app. Run `powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1` to create release assets without launching it. Assets and upload instructions are written to `dist/v1.4.0/`.
+Run `BUILD_EXE.bat` to compile and launch the app. Run `powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1` to create release assets without launching it. Assets and upload instructions are written to `dist/v1.5.0/`.
 
 Run `tests/run.ps1` for UI and persistence checks, `tests/run-browser.ps1` for process limits and cleanup checks, and `tests/run-live.ps1` to validate the four real September 2026 giveaway links. Live tests make network requests and can fail if those pages change or become unavailable. Tests do not modify your saved giveaways.
 
