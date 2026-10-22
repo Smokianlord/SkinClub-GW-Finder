@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- Only one copy of the app can run; starting another brings the first to the front.
+- Unhandled errors are logged to `crash.log`; empty `catch` blocks now log to the Logs tab.
+- New Settings dialog and `settings.json` (refresh interval, History size, notifications, browser, timeouts, `ExtraCreators`).
+- Optional tray notifications for new giveaways and giveaways ending today.
+- Faster, lighter Deep Search: headers-first requests, capped page sizes, page checks overlap with discovery, higher probe concurrency, scan data copied without a JSON round-trip, memory trimmed after scans.
+- `Program.cs` split into `src/` files; `scripts/build.ps1` is the single build entry point; CI now runs the UI and browser-lifecycle tests.
+
 ## [1.4.0] - 2026-10-04
 
 - Much faster refresh: metadata already resolved for a saved giveaway (deadline, promocode, minimum deposit) is reused instead of relaunching a headless browser for every page on every refresh. Pages that still lack metadata are retried at most every 12 hours.

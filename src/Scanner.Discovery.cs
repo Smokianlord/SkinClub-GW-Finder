@@ -85,7 +85,7 @@ namespace SkinClubGiveawayDesktop
                     if (host.StartsWith("www.")) host = host.Substring(4);
                     if (host.EndsWith(".club", StringComparison.OrdinalIgnoreCase)) hosts.Add(host);
                 }
-                catch { }
+                catch (Exception swallowed) { Diag.Swallow("Skipping malformed discovered URL", swallowed); }
             }
 
             foreach (string host in hosts)
@@ -101,11 +101,11 @@ namespace SkinClubGiveawayDesktop
             ActivityLog.Write("SOURCE", "Fetching " + url);
             try
             {
-                using (HttpResponseMessage r = await Client.GetAsync(url))
+                using (HttpResponseMessage r = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
                 {
                     if (!r.IsSuccessStatusCode)
                     { ActivityLog.Write("ERROR", "HTTP " + (int)r.StatusCode + " fetching " + url); return ""; }
-                    string content = await r.Content.ReadAsStringAsync();
+                    string content = await ReadBodyCappedAsync(r, MaxDiscoveryBytes);
                     ActivityLog.Write("SOURCE", "Received " + content.Length + " characters from " + url);
                     return content;
                 }
@@ -315,54 +315,60 @@ namespace SkinClubGiveawayDesktop
             try
             {
                 ActivityLog.Write("SCAN", "Deep Search started: Telegram, YouTube, partner socials and web search");
+                HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
+                KnownItems = IndexKnown(data);
+                ResetChecks(0);
+
+                // Page checks start immediately and overlap with the slower social/search
+                // discovery, instead of waiting for every source to finish first. Pages found
+                // later are queued as they arrive; a URL is only ever checked once.
+                HashSet<string> queued = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                List<Task<GiveawayItem>> validations = new List<Task<GiveawayItem>>();
+                SemaphoreSlim throttle = new SemaphoreSlim(AppSettings.Current.ProbeConcurrency, AppSettings.Current.ProbeConcurrency);
+                Action<IEnumerable<Candidate>> enqueue = delegate(IEnumerable<Candidate> items)
+                {
+                    foreach (Candidate c in items)
+                    {
+                        if (string.IsNullOrWhiteSpace(c.Url)) continue;
+                        string key = GiveawayKey(c.Url);
+                        if (key.Length == 0 || !queued.Add(key)) continue;
+                        Interlocked.Increment(ref checksTotal);
+                        validations.Add(ValidateAsync(new Candidate(c.Creator, CleanDiscoveredUrl(c.Url), c.Source), throttle));
+                    }
+                };
+
+                List<Candidate> saved = new List<Candidate>();
+                foreach (GiveawayItem i in data.Items)
+                    saved.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
+
                 Task<List<Candidate>> telegram = DiscoverTelegramAsync();
                 Task<List<Candidate>> youtube = DiscoverYoutubeAsync();
                 Task<List<Candidate>> partnerSocials = DiscoverPartnerSocialsAsync();
                 Task<List<Candidate>> web = DiscoverWebAsync();
 
-                List<Candidate> candidates = GeneratedCandidates();
-                candidates.AddRange(await telegram);
-                candidates.AddRange(await youtube);
-                candidates.AddRange(await partnerSocials);
-                candidates.AddRange(await web);
-                foreach (GiveawayItem i in data.Items)
-                    candidates.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
+                enqueue(saved);
+                enqueue(GeneratedCandidates());
+
+                List<Candidate> discovered = new List<Candidate>();
+                discovered.AddRange(await telegram);
+                discovered.AddRange(await youtube);
+                discovered.AddRange(await partnerSocials);
+                discovered.AddRange(await web);
+                discovered.AddRange(saved);
 
                 // Any .club domain discovered from search, Telegram, YouTube, or an
                 // existing saved item becomes probeable automatically. This prevents
                 // Deep Search from depending only on the hard-coded creator list.
-                AddDiscoveredDomainProbes(candidates);
-
-                Dictionary<string, Candidate> dedup = new Dictionary<string, Candidate>(StringComparer.OrdinalIgnoreCase);
-                foreach (Candidate c in candidates)
-                {
-                    if (string.IsNullOrWhiteSpace(c.Url)) continue;
-                    string key = GiveawayKey(c.Url);
-                    if (key.Length == 0) continue;
-                    if (!dedup.ContainsKey(key))
-                    {
-                        dedup[key] = new Candidate(c.Creator, CleanDiscoveredUrl(c.Url), c.Source);
-                    }
-                }
-                candidates = dedup.Values.ToList();
-                ActivityLog.Write("SCAN", "Discovery complete; validating " + candidates.Count + " unique candidate pages");
-                HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
-                KnownItems = IndexKnown(data);
+                AddDiscoveredDomainProbes(discovered);
+                enqueue(discovered);
+                ActivityLog.Write("SCAN", "Discovery complete; checking " + validations.Count + " unique candidate pages");
 
                 List<GiveawayItem> useful = new List<GiveawayItem>();
-                SemaphoreSlim throttle = new SemaphoreSlim(12, 12);
-                const int chunkSize = 180;
-                for (int start = 0; start < candidates.Count; start += chunkSize)
+                GiveawayItem[] updates = await Task.WhenAll(validations);
+                foreach (GiveawayItem u in updates)
                 {
-                    List<Candidate> batch = candidates.Skip(start).Take(chunkSize).ToList();
-                    List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
-                    foreach (Candidate c in batch) tasks.Add(ValidateAsync(c, throttle));
-                    GiveawayItem[] updates = await Task.WhenAll(tasks);
-                    foreach (GiveawayItem u in updates)
-                    {
-                        string key = GiveawayKey(u.Url);
-                        if (u.Status == "active" || u.Status == "ended" || known.Contains(key)) useful.Add(u);
-                    }
+                    string key = GiveawayKey(u.Url);
+                    if (u.Status == "active" || u.Status == "ended" || known.Contains(key)) useful.Add(u);
                 }
                 MergeItems(data, useful);
                 data.LastScan = DateTime.UtcNow.ToString("o");
@@ -378,6 +384,7 @@ namespace SkinClubGiveawayDesktop
         {
             if (!DirectUrlRegex.IsMatch(url)) throw new ArgumentException("Use a direct dated creator giveaway URL, for example https://creator.club/010926/");
             SemaphoreSlim throttle = new SemaphoreSlim(1, 1);
+            ResetChecks(1);
             return await ValidateAsync(new Candidate(creator, url, "manual"), throttle);
         }
 

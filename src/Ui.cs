@@ -48,7 +48,7 @@ namespace SkinClubGiveawayDesktop
         // Dark scroll bars (Windows 10 1809+); harmless no-op on older systems.
         public static void DarkScrollBars(Control control)
         {
-            EventHandler apply = delegate { try { SetWindowTheme(control.Handle, "DarkMode_Explorer", null); } catch { } };
+            EventHandler apply = delegate { try { SetWindowTheme(control.Handle, "DarkMode_Explorer", null); } catch (Exception swallowed) { Diag.Swallow("Applying dark scrollbars", swallowed); } };
             if (control.IsHandleCreated) apply(control, EventArgs.Empty);
             control.HandleCreated += apply;
         }
@@ -60,7 +60,7 @@ namespace SkinClubGiveawayDesktop
                 int on = 1;
                 if (DwmSetWindowAttribute(handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(handle, 19, ref on, 4);
             }
-            catch { }
+            catch (Exception swallowed) { Diag.Swallow("Applying dark title bar", swallowed); }
         }
 
         public static GraphicsPath RoundPath(Rectangle r, int radius)
@@ -498,7 +498,7 @@ namespace SkinClubGiveawayDesktop
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception swallowed) { Diag.Swallow("Loading window icon", swallowed); }
 
             Label title = new Label();
             title.Text = "Add a giveaway";

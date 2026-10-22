@@ -21,6 +21,15 @@ static class RegressionTests
                 Content = new StringContent("homepage") });
         }
     }
+    sealed class FixedPageHandler : HttpMessageHandler
+    {
+        readonly string body;
+        public FixedPageHandler(string body) { this.body = body; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = request, Content = new StringContent(body) });
+        }
+    }
     static int checks;
     static void Check(bool value, string message)
     {
@@ -40,6 +49,7 @@ static class RegressionTests
         // Framework test process only: never read or write the user's saved data.
         typeof(DataStore).GetField("DataDir").SetValue(null, folder);
         typeof(DataStore).GetField("DataFile").SetValue(null, Path.Combine(folder, "data.json"));
+        AppSettings.Current = new AppSettings();
         AppData data = new AppData();
         data.Items.Add(new GiveawayItem { Creator = "Alpha", Url = "https://alpha.club/010926/", Status = "active", Ticket = "12 / 100", MinimumDeposit = "$10" });
         data.Items.Add(new GiveawayItem { Creator = "Beta", Url = "https://beta.club/010926/", Status = "active", Ticket = "2 / 100", MinimumDeposit = "$2" });
@@ -68,6 +78,61 @@ static class RegressionTests
         history.Items.Add(new GiveawayItem { Url = "https://newest.club/", Status = "ended", HistorySince = DateTime.UtcNow.ToString("o") });
         File.WriteAllText(DataStore.DataFile, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(history));
         Check(DataStore.Load().Items.Count == 32 && !File.ReadAllText(DataStore.DataFile).Contains("https://history.club/6\""), "Loading oversized history removes and persists excess entries");
+        AppSettings tuned = new AppSettings { RefreshMinutes = 0, HistoryLimit = 100000, HttpTimeoutSeconds = -5 };
+        tuned.ExtraCreators["Good"] = "WWW.Good.Club";
+        tuned.ExtraCreators["Bad"] = "not a domain";
+        tuned.ExtraCreators["Path"] = "evil.club/steal";
+        AppSettings.Current = tuned;
+        Check(tuned.RefreshMinutes == 1 && tuned.HistoryLimit == 500 && tuned.HttpTimeoutSeconds == 3, "Settings values are clamped to safe ranges");
+        Check(tuned.ExtraCreators.Count == 1 && tuned.ExtraCreators["Good"] == "good.club", "Only valid extra creator domains are kept");
+        tuned.Save();
+        Check(File.ReadAllText(AppSettings.SettingsFile).Contains("\"RefreshMinutes\": 1"), "Settings are saved as readable JSON");
+        typeof(AppSettings).GetField("current", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
+        Check(AppSettings.Current.ExtraCreators.ContainsKey("Good"), "Saved settings load back");
+        File.WriteAllText(AppSettings.SettingsFile, "{ not json");
+        typeof(AppSettings).GetField("current", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
+        Check(AppSettings.Current.HistoryLimit == 30, "Broken settings.json falls back to defaults");
+        AppSettings.Current = new AppSettings();
+
+        HttpResponseMessage big = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(new string('x', 3 * 1024 * 1024)) };
+        string capped = ((Task<string>)typeof(Scanner).GetMethod("ReadBodyCappedAsync", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { big, 1024 * 1024 })).GetAwaiter().GetResult();
+        Check(capped.Length == 1024 * 1024, "Downloaded page bodies are capped in memory");
+
+        Check(GiveawayInfo.IsEntryCodeFor("LP-KRYOZ-010926", "https://kryoz.club/010926/") &&
+              !GiveawayInfo.IsEntryCodeFor("LP-XTVFAGX7QP9W", "https://kryoz.club/010926/") &&
+              !GiveawayInfo.IsEntryCodeFor("-", "https://kryoz.club/010926/"), "Only a code ending with the URL date slug is an entry code");
+
+        AppData codes = new AppData();
+        codes.Items.Add(new GiveawayItem { Creator = "Kryoz", Url = "https://kryoz.club/010926/", Status = "ended", PromoCode = "LP-KRYOZ-010926", MinimumDeposit = "$10" });
+        codes.Items.Add(new GiveawayItem { Creator = "Kryoz", Url = "https://kryoz.club/010826/", Status = "ended", PromoCode = "LP-XTVFAGX7QP9W", MinimumDeposit = "$5" });
+        codes.Items.Add(new GiveawayItem { Creator = "Yumi", Url = "https://tooyumi.club/010826/", Status = "ended", PromoCode = "LP-ABCDEF123456", MinimumDeposit = "-" });
+        codes.Items.Add(new GiveawayItem { Creator = "Kryoz", Url = "https://kryoz.club/020926/", Status = "ended", PromoCode = "LP-KRYOZ-010826", MinimumDeposit = "$3" });
+        Check(GiveawayInfo.RepairEntryCodes(codes), "Bad entry codes are detected on load");
+        Check(codes.Items[1].PromoCode == "LP-KRYOZ-010826" && codes.Items[1].MinimumDeposit == "$5", "A discount code left by an ended page is rebuilt from the creator's code pattern, keeping the deposit");
+        Check(codes.Items[2].PromoCode == "-", "A bad code with no known pattern is cleared instead of guessed");
+        Check(codes.Items[3].PromoCode == "LP-KRYOZ-020926" && codes.Items[3].MinimumDeposit == "-", "A code from another giveaway date resets the mixed-up record");
+        Check(codes.Items[0].PromoCode == "LP-KRYOZ-010926" && codes.Items[0].MinimumDeposit == "$10", "A correct saved code and deposit are left alone");
+
+        AppData latest = new AppData();
+        latest.Items.Add(new GiveawayItem { Creator = "Jon", Url = "https://jonsandman.club/010926/", Status = "ended", HistorySince = DateTime.UtcNow.ToString("o") });
+        latest.Items.Add(new GiveawayItem { Creator = "Jon", Url = "https://jonsandman.club/020926/", Status = "ended", HistorySince = DateTime.UtcNow.AddDays(-5).ToString("o") });
+        latest.Items.Add(new GiveawayItem { Creator = "Jon", Url = "https://jonsandman.club/010826/", Status = "ended", HistorySince = DateTime.UtcNow.AddDays(-9).ToString("o") });
+        latest.Items.Add(new GiveawayItem { Creator = "Blarg", Url = "https://blarg.club/010826/", Status = "ended" });
+        System.Collections.Generic.List<GiveawayItem> newest = GiveawayInfo.LatestPerCreator(latest.Items);
+        Check(newest.Count == 2 && newest.Any(i => i.Url == "https://jonsandman.club/020926/"), "Latest per creator picks the newest dated link, not the newest saved");
+
+        AppData pruned = new AppData();
+        pruned.Items.Add(new GiveawayItem { Creator = "Old", Url = "https://oldcreator.club/010926/", Status = "ended", HistorySince = DateTime.UtcNow.AddYears(-1).ToString("o") });
+        for (int n = 0; n < 40; n++)
+            pruned.Items.Add(new GiveawayItem { Creator = "Busy", Url = "https://busy.club/01" + (n % 12 + 1).ToString("00") + "26/?n=" + n, Status = "ended", HistorySince = DateTime.UtcNow.AddMinutes(-n).ToString("o") });
+        DataStore.Save(pruned);
+        Check(pruned.Items.Any(i => i.Url == "https://oldcreator.club/010926/"), "History cap never drops a creator's latest giveaway");
+
+        typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null,
+            new HttpClient(new FixedPageHandler("<html><body>Tickets left: 0 / 500 <a href=\"https://skin.club/?promocode=LP-XTVFAGX7QP9W\">go</a></body></html>")));
+        GiveawayItem endedPage = Scanner.ValidateAsync(new Candidate("Kryoz", "https://kryoz.club/010826/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
+        Check(endedPage.Status == "ended" && endedPage.PromoCode == "-", "An ended page's unrelated code is not taken as the entry code");
+
         typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, new HttpClient(new RedirectHandler()));
         GiveawayItem redirected = Scanner.ValidateAsync(new Candidate("Alpha", data.Items[0].Url, "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
         Check(redirected.Url == data.Items[0].Url && redirected.Status == "unknown" && redirected.Error != null, "Redirect preserves identity and reports failed validation");

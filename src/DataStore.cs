@@ -56,28 +56,17 @@ namespace SkinClubGiveawayDesktop
                         upper == "PRIZE" || upper == "POOL" || upper == "DISCOUNT" ||
                         upper == "PROMO" || upper == "PROMOCODE" || upper == "CODE")
                         item.PromoCode = "-";
-
-                    // Repair metadata contaminated by the old concurrent Chromium/CDP
-                    // race. Participation codes normally carry the same DDMMYY slug as
-                    // the giveaway URL. If the saved code points at a different dated
-                    // giveaway (for example SAMZ /010926 with ...-010826), discard the
-                    // promo/deposit so the normal refresh can repopulate them correctly.
-                    if (!string.IsNullOrWhiteSpace(item.PromoCode) && item.PromoCode != "-" &&
-                        !string.IsNullOrWhiteSpace(item.Url))
-                    {
-                        Match promoDate = Regex.Match(item.PromoCode, @"-(\d{6})$", RegexOptions.IgnoreCase);
-                        Match urlDate = Regex.Match(item.Url, @"/(\d{6})(?:/|$|\?)", RegexOptions.IgnoreCase);
-                        if (promoDate.Success && urlDate.Success &&
-                            !string.Equals(promoDate.Groups[1].Value, urlDate.Groups[1].Value, StringComparison.OrdinalIgnoreCase))
-                        {
-                            item.PromoCode = "-";
-                            item.MinimumDeposit = "-";
-                        }
-                    }
                 }
+
+                // Repair metadata contaminated by the old concurrent Chromium/CDP race, and entry
+                // codes overwritten by an ended page's unrelated code (see GiveawayInfo). Keep a
+                // one-time copy of the file before the first repair so nothing is lost.
+                bool repaired = GiveawayInfo.RepairEntryCodes(data);
+                string beforeRepair = DataFile + ".before-code-repair";
+                if (repaired && !File.Exists(beforeRepair)) File.Copy(DataFile, beforeRepair, false);
                 int previousCount = data.Items.Count;
                 PruneOldHistory(data);
-                if (data.Items.Count != previousCount) Save(data);
+                if (repaired || data.Items.Count != previousCount) Save(data);
                 return data;
             }
             catch
@@ -110,29 +99,22 @@ namespace SkinClubGiveawayDesktop
         {
             if (data == null || data.Items == null) return;
 
-            // History is capped by recency, independently of the current grid sort.
-            // Joined and active entries never count toward this limit.
-            HashSet<GiveawayItem> older = new HashSet<GiveawayItem>(data.Items
-                .Where(delegate(GiveawayItem item) {
-                    return item != null && !item.Joined &&
-                        string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase);
-                })
-                .OrderByDescending(HistoryRecency)
-                .ThenBy(delegate(GiveawayItem item) { return item.Url ?? ""; }, StringComparer.OrdinalIgnoreCase)
-                .Skip(30));
-            data.Items.RemoveAll(delegate(GiveawayItem item) { return older.Contains(item); });
-        }
-
-        private static DateTime HistoryRecency(GiveawayItem item)
-        {
-            DateTime timestamp;
-            if (DateTime.TryParse(item.HistorySince, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.RoundtripKind, out timestamp))
-                return timestamp.ToUniversalTime();
-            if (DateTime.TryParse(item.LastChecked, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.RoundtripKind, out timestamp))
-                return timestamp.ToUniversalTime();
-            return DateTime.MinValue;
+            // History is capped by recency, independently of the current grid sort. Joined and
+            // active entries never count toward the limit, and each creator's newest ended
+            // giveaway is always kept so the History tab can show it.
+            List<GiveawayItem> ended = data.Items.Where(delegate(GiveawayItem item) {
+                return item != null && !item.Joined &&
+                    string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase);
+            }).ToList();
+            HashSet<GiveawayItem> keep = new HashSet<GiveawayItem>(GiveawayInfo.LatestPerCreator(ended));
+            int slots = Math.Max(0, AppSettings.Current.HistoryLimit - keep.Count);
+            foreach (GiveawayItem item in ended
+                .Where(delegate(GiveawayItem x) { return !keep.Contains(x); })
+                .OrderByDescending(GiveawayInfo.Recency)
+                .ThenBy(delegate(GiveawayItem x) { return x.Url ?? ""; }, StringComparer.OrdinalIgnoreCase)
+                .Take(slots))
+                keep.Add(item);
+            data.Items.RemoveAll(delegate(GiveawayItem item) { return ended.Contains(item) && !keep.Contains(item); });
         }
         private static void ImportOldDataIfPresent()
         {
@@ -153,7 +135,7 @@ namespace SkinClubGiveawayDesktop
                 string old = Path.Combine(Application.StartupPath, "data.json");
                 if (File.Exists(old)) File.Copy(old, DataFile, false);
             }
-            catch { }
+            catch (Exception swallowed) { Diag.Swallow("Importing data from an older version", swallowed); }
         }
 
         private static AppData DefaultData()

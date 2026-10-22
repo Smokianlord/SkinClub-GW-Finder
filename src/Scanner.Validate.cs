@@ -25,6 +25,7 @@ namespace SkinClubGiveawayDesktop
         public static async Task<GiveawayItem> ValidateAsync(Candidate c, SemaphoreSlim throttle)
         {
             await throttle.WaitAsync();
+            Interlocked.Increment(ref activeChecks);
             try
             {
                 ActivityLog.Write("CHECK", c.Url);
@@ -36,7 +37,9 @@ namespace SkinClubGiveawayDesktop
                 try
                 {
                     string html;
-                    using (HttpResponseMessage r = await Client.GetAsync(c.Url))
+                    // Headers first: a 404 or a redirect to a homepage is rejected without
+                    // downloading its body, and accepted pages are read with a size cap.
+                    using (HttpResponseMessage r = await Client.GetAsync(c.Url, HttpCompletionOption.ResponseHeadersRead))
                     {
                     if (!r.IsSuccessStatusCode)
                     {
@@ -50,13 +53,15 @@ namespace SkinClubGiveawayDesktop
                         item.Error = "Page redirected to a different giveaway or homepage";
                         return item;
                     }
-                    html = await r.Content.ReadAsStringAsync();
+                    html = await ReadBodyCappedAsync(r, MaxPageBytes);
                     }
                     ParseResult p = ParsePage(html);
                     item.Status = p.Status;
                     item.Ticket = p.Ticket;
-                    item.PromoCode = p.PromoCode;
-                    item.MinimumDeposit = p.MinimumDeposit;
+                    // Only a code ending with the URL's DDMMYY slug is the entry code. Ended pages show
+                    // an unrelated code instead; taking it would overwrite the real, saved one.
+                    item.PromoCode = GiveawayInfo.EntryCodeOrDash(p.PromoCode, item.Url);
+                    item.MinimumDeposit = (p.PromoCode != "-" && item.PromoCode == "-") ? "-" : p.MinimumDeposit;
                     item.Deadline = p.Deadline;
 
                     // Current SkinClub creator pages can inject the hour countdown only
@@ -87,7 +92,7 @@ namespace SkinClubGiveawayDesktop
                                 DateTime.TryParse(prior.Deadline, out knownDeadline) && knownDeadline.Date >= DateTime.Now.Date)
                                 item.Deadline = prior.Deadline;
                         }
-                        if (item.PromoCode == "-" && !string.IsNullOrWhiteSpace(prior.PromoCode) && prior.PromoCode != "-")
+                        if (item.PromoCode == "-" && GiveawayInfo.IsEntryCodeFor(prior.PromoCode, item.Url))
                             item.PromoCode = prior.PromoCode;
                         if (item.MinimumDeposit == "-" && !string.IsNullOrWhiteSpace(prior.MinimumDeposit) && prior.MinimumDeposit != "-")
                             item.MinimumDeposit = prior.MinimumDeposit;
@@ -105,7 +110,10 @@ namespace SkinClubGiveawayDesktop
                         string.Equals(c.Source, "discovered-domain-probe", StringComparison.OrdinalIgnoreCase);
                     bool staticGiveawaySignal = !string.Equals(item.Status, "unknown", StringComparison.OrdinalIgnoreCase) ||
                         Regex.IsMatch(html, @"tickets?\s*(?:left|remaining)[^0-9]{0,40}[0-9]+\s*/\s*[0-9]+|time\s*to\s*completion", RegexOptions.IgnoreCase);
-                    bool allowRenderedMetadata = missingMetadata && (!generatedProbe || staticGiveawaySignal);
+                    // An ended page no longer shows the entry code or deposit, so rendering it in a
+                    // browser can only return unrelated values; keep what was saved while it was live.
+                    bool endedPage = string.Equals(item.Status, "ended", StringComparison.OrdinalIgnoreCase);
+                    bool allowRenderedMetadata = missingMetadata && !endedPage && (!generatedProbe || staticGiveawaySignal);
 
                     // Promo/minimum-deposit values may also be client-rendered on already-ended
                     // giveaways. Saved/social links can still use the rendered metadata path.
@@ -113,8 +121,12 @@ namespace SkinClubGiveawayDesktop
                     {
                         RenderedFields rendered = await FetchRenderedFieldsAsync(item.Url);
                         item.RenderedAt = DateTime.UtcNow.ToString("o");
-                        if (rendered.PromoCode != "-") item.PromoCode = rendered.PromoCode;
-                        if (rendered.MinimumDeposit != "-") item.MinimumDeposit = rendered.MinimumDeposit;
+                        string renderedCode = GiveawayInfo.EntryCodeOrDash(rendered.PromoCode, item.Url);
+                        if (renderedCode != "-")
+                        {
+                            item.PromoCode = renderedCode;
+                            if (rendered.MinimumDeposit != "-") item.MinimumDeposit = rendered.MinimumDeposit;
+                        }
 
                         // Only let rendered timer data alter the deadline/status for a page that
                         // was parsed as active. For ended/unknown pages we are here solely to
@@ -135,7 +147,12 @@ namespace SkinClubGiveawayDesktop
                 }
                 finally { ActivityLog.Write(item.Error == null ? "RESULT" : "ERROR", c.Url + " — " + item.Status + (item.Error == null ? "" : ": " + item.Error)); }
             }
-            finally { throttle.Release(); }
+            finally
+            {
+                Interlocked.Decrement(ref activeChecks);
+                Interlocked.Increment(ref checksDone);
+                throttle.Release();
+            }
         }
 
         private static void MergeItems(AppData data, IEnumerable<GiveawayItem> updates)
@@ -227,20 +244,16 @@ namespace SkinClubGiveawayDesktop
                     // cleanup removes them. Active/unknown items still refresh.
                     if (string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Normal History entries stay persisted and are not revalidated on
-                        // every launch. Joined entries are different: older saved items may
-                        // predate the promocode/minimum-deposit fields, so allow a metadata
-                        // backfill only while one of those fields is still missing.
-                        bool missingJoinedMetadata = i.Joined &&
-                            (string.IsNullOrWhiteSpace(i.PromoCode) || i.PromoCode == "-" ||
-                             string.IsNullOrWhiteSpace(i.MinimumDeposit) || i.MinimumDeposit == "-");
-                        if (!missingJoinedMetadata) continue;
+                        // An ended page no longer shows its entry code or deposit, so there is
+                        // nothing left to backfill: keep what was saved while it was live.
+                        continue;
                     }
                     cs.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
                 }
                 KnownItems = IndexKnown(data);
                 SemaphoreSlim throttle = new SemaphoreSlim(16, 16);
                 List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
+                ResetChecks(cs.Count);
                 foreach (Candidate c in cs) tasks.Add(ValidateAsync(c, throttle));
                 GiveawayItem[] updates = tasks.Count == 0 ? new GiveawayItem[0] : await Task.WhenAll(tasks);
                 MergeItems(data, updates);

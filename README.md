@@ -25,11 +25,20 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 - **Bounded browser usage:** one rendered page at a time, capped at five app-owned browser processes total. The complete process group is terminated and checked after each page, even if the original browser process already exited. Rendering has a 30-second timeout and an independent 45-second cleanup watchdog.
 - **Logs tab:** live page checks, render queue, browser launches, results, failures, and confirmed cleanup. Shows the current browser process count and queued pages, with Copy/Clear actions and a bounded 2,000-event session history.
 
-## Validation
+- **Settings dialog and `settings.json`:** refresh interval, History size, notifications and browser choice, plus advanced options (timeouts, `ExtraCreators` to track a new creator domain without recompiling).
+- **Notifications:** an optional Windows tray notification when an automatic refresh finds a new giveaway or one ends today.
+- **Single instance and crash log:** starting a second copy brings the first to the front. Unexpected errors are written to `crash.log` in the data folder instead of disappearing.
+- **Lean scans:** pages are fetched headers-first with a size cap, checks overlap with discovery, and memory is returned to Windows when a scan ends.
+
+## Install
 
 For downloads, use [GitHub Releases](https://github.com/Smokianlord/SkinClub-GW-Finder/releases). Extract the Windows ZIP, close older copies, and run `SkinClubGWFinder.exe`. Requires Windows 10/11, .NET Framework 4.8, and Edge or Chrome for rendered-page metadata. No installer is needed; builds are unsigned.
 
-Saved data lives in `%LOCALAPPDATA%\SkinClub GW Finder\data.json`. Back it up before upgrading if you need all older History entries: v1.3.0 automatically keeps only the 30 most recent History giveaways. Joined entries are preserved.
+Saved data lives in `%LOCALAPPDATA%\SkinClub GW Finder\data.json`; options are in `settings.json` and error reports in `crash.log` in the same folder. Back it up before upgrading if you need all older History entries: v1.3.0 automatically keeps only the 30 most recent History giveaways. Joined entries are preserved.
+
+## Building
+
+The source is in `src/` (data store, scanner split into parsing/render/validate/discovery, UI, settings). `scripts/build.ps1` is the one place that compiles it; `BUILD_EXE.bat`, CI, the tests and the release script all call it, so new `.cs` files under `src/` are picked up automatically.
 
 Run `BUILD_EXE.bat` to compile and launch the app. Run `powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1` to create release assets without launching it. Assets and upload instructions are written to `dist/v1.4.0/`.
 

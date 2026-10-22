@@ -24,7 +24,8 @@ namespace SkinClubGiveawayDesktop
     {
         public static readonly SemaphoreSlim ScanLock = new SemaphoreSlim(1, 1);
 
-        private static readonly Dictionary<string, string> CreatorDomains = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        // Built-in creators. More can be added without recompiling through ExtraCreators in settings.json.
+        private static readonly Dictionary<string, string> BuiltInCreators = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             {"Anomaly", "anomaly.club"}, {"Blarg", "blarg.club"}, {"Bomman", "bomman.club"},
             {"bysTaXx", "bystaxx.club"}, {"DEVNGUYEN", "devnguyen.club"}, {"DrewCS2", "drewcs2.club"}, {"DrewUnboxing", "drewunboxing.club"},
@@ -38,6 +39,15 @@ namespace SkinClubGiveawayDesktop
             {"Kryoz", "kryoz.club"}, {"Python", "thepython.club"}, {"JOISPOI24", "joispoi.club"},
             {"Joaco", "joaco.club"}
         };
+
+        private static readonly Dictionary<string, string> CreatorDomains = MergeCreators();
+
+        private static Dictionary<string, string> MergeCreators()
+        {
+            Dictionary<string, string> all = new Dictionary<string, string>(BuiltInCreators, StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, string> extra in AppSettings.Current.ExtraCreators) all[extra.Key] = extra.Value;
+            return all;
+        }
 
         private static readonly Dictionary<string, string> DomainCreators = BuildDomainCreators();
 
@@ -111,6 +121,17 @@ namespace SkinClubGiveawayDesktop
         // HTTP discovery stays concurrent. Render one page at a time, with Windows
         // enforcing five browser processes total INCLUDING the root and all children.
         private static readonly SemaphoreSlim RenderFallbackThrottle = new SemaphoreSlim(1, 1);
+        // Live progress for the Logs tab: page checks in flight, finished, and expected this scan.
+        private static int activeChecks, checksDone, checksTotal;
+        public static int ActiveChecks { get { return Volatile.Read(ref activeChecks); } }
+        public static int ChecksDone { get { return Volatile.Read(ref checksDone); } }
+        public static int ChecksTotal { get { return Volatile.Read(ref checksTotal); } }
+        private static void ResetChecks(int total)
+        {
+            Volatile.Write(ref checksDone, 0);
+            Volatile.Write(ref checksTotal, total);
+        }
+
         private static int queuedRenders;
         public static int QueuedRenders { get { return Volatile.Read(ref queuedRenders); } }
         private static readonly object RenderCacheGate = new object();
@@ -119,9 +140,37 @@ namespace SkinClubGiveawayDesktop
         private static readonly TimeSpan RenderCacheLifetime = TimeSpan.FromMinutes(10);
         // How long to wait before launching the browser again for a page whose
         // promocode / deposit / deadline could not be found on the last attempt.
-        private static readonly TimeSpan MetadataRetryInterval = TimeSpan.FromHours(12);
+        private static readonly TimeSpan MetadataRetryInterval = TimeSpan.FromHours(AppSettings.Current.MetadataRetryHours);
         // Snapshot of already-saved items, keyed by GiveawayKey, for the scan in progress.
         private static volatile Dictionary<string, GiveawayItem> KnownItems;
+
+        // Upper bounds on how much of a response is ever held in memory. Giveaway pages are small;
+        // YouTube watch pages are large, but the description sits near the top of the document.
+        private const int MaxPageBytes = 1024 * 1024;
+        private const int MaxDiscoveryBytes = 2 * 1024 * 1024;
+
+        private static async Task<string> ReadBodyCappedAsync(HttpResponseMessage response, int maxBytes)
+        {
+            using (Stream stream = await response.Content.ReadAsStreamAsync())
+            using (MemoryStream buffer = new MemoryStream())
+            {
+                byte[] chunk = new byte[16 * 1024];
+                int total = 0, read;
+                while (total < maxBytes && (read = await stream.ReadAsync(chunk, 0, Math.Min(chunk.Length, maxBytes - total))) > 0)
+                {
+                    buffer.Write(chunk, 0, read);
+                    total += read;
+                }
+                Encoding encoding = Encoding.UTF8;
+                string charset = response.Content.Headers.ContentType == null ? null : response.Content.Headers.ContentType.CharSet;
+                if (!string.IsNullOrWhiteSpace(charset))
+                {
+                    try { encoding = Encoding.GetEncoding(charset.Trim('"', '\'')); }
+                    catch (ArgumentException) { }
+                }
+                return encoding.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+            }
+        }
 
         private static Dictionary<string, GiveawayItem> IndexKnown(AppData data)
         {
@@ -168,7 +217,7 @@ namespace SkinClubGiveawayDesktop
             h.AllowAutoRedirect = true;
             h.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
             HttpClient c = new HttpClient(h);
-            c.Timeout = TimeSpan.FromSeconds(8);
+            c.Timeout = TimeSpan.FromSeconds(AppSettings.Current.HttpTimeoutSeconds);
             c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36");
             c.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
             return c;
@@ -243,6 +292,9 @@ namespace SkinClubGiveawayDesktop
         private static List<Candidate> ExtractDirectUrls(string raw, string source)
         {
             List<Candidate> list = new List<Candidate>();
+            // Most fetched pages (search results, social posts) contain no giveaway domain at all;
+            // skip the decode/regex work, and its temporary string copies, for those.
+            if (string.IsNullOrEmpty(raw) || raw.IndexOf(".club", StringComparison.OrdinalIgnoreCase) < 0) return list;
             string normalized = NormalizeDiscoveryHtml(raw);
             MatchCollection matches = DirectUrlRegex.Matches(normalized);
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

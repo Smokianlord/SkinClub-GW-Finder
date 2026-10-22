@@ -24,6 +24,10 @@ namespace SkinClubGiveawayDesktop
     {
         private static string FindChromiumBrowser()
         {
+            string custom = AppSettings.Current.BrowserPath;
+            if (!string.IsNullOrWhiteSpace(custom) && File.Exists(custom)) return custom;
+            if (!string.IsNullOrWhiteSpace(custom)) ActivityLog.Write("WARN", "Configured browser not found, using automatic detection: " + custom);
+
             List<string> paths = new List<string>();
             string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
             string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
@@ -121,7 +125,7 @@ namespace SkinClubGiveawayDesktop
                             if (!inner.TryGetValue("value", out valueObj)) return "";
                             return JsonStringValue(valueObj);
                         }
-                        catch { return ""; }
+                        catch (Exception swallowed) { Diag.Swallow("Reading DevTools result", swallowed); return ""; }
                     }
                 }
             }
@@ -215,7 +219,7 @@ namespace SkinClubGiveawayDesktop
             Process process = null;
             HttpClient localClient = null;
             CancellationTokenSource renderCts = CancellationTokenSource.CreateLinkedTokenSource(BrowserProcessManager.ShutdownToken);
-            renderCts.CancelAfter(TimeSpan.FromSeconds(30));
+            renderCts.CancelAfter(TimeSpan.FromSeconds(AppSettings.Current.RenderTimeoutSeconds));
             CancellationToken token = renderCts.Token;
             try
             {
@@ -239,7 +243,7 @@ namespace SkinClubGiveawayDesktop
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
 
                 process = BrowserProcessManager.StartHidden(psi.FileName, psi.Arguments);
-                try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+                try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch (Exception swallowed) { Diag.Swallow("Lowering browser priority", swallowed); }
 
                 HttpClientHandler localHandler = new HttpClientHandler();
                 localHandler.UseProxy = false;
@@ -248,7 +252,7 @@ namespace SkinClubGiveawayDesktop
                 string websocketUrl = "";
                 int port = 0;
                 string requestedHost = "";
-                try { requestedHost = new Uri(url).Host; } catch { }
+                try { requestedHost = new Uri(url).Host; } catch (Exception swallowed) { Diag.Swallow("Reading requested host", swallowed); }
                 DateTime discoveryDeadline = DateTime.UtcNow.AddSeconds(8);
 
                 // With --remote-debugging-port=0 Chromium writes the actual selected port
@@ -268,7 +272,7 @@ namespace SkinClubGiveawayDesktop
                                 port = parsedPort;
                         }
                     }
-                    catch { }
+                    catch (IOException) { /* DevToolsActivePort is still being written; retry */ }
                     if (port <= 0) await Task.Delay(100, token);
                 }
 
@@ -308,7 +312,8 @@ namespace SkinClubGiveawayDesktop
                             }
                         }
                     }
-                    catch { }
+                    catch (HttpRequestException) { /* DevTools endpoint is not up yet; retry */ }
+                    catch (TaskCanceledException) { if (token.IsCancellationRequested) throw; }
                     if (string.IsNullOrWhiteSpace(websocketUrl)) await Task.Delay(150, token);
                 }
 

@@ -37,6 +37,9 @@ namespace SkinClubGiveawayDesktop
         private Button refreshButton;
         private Button deepButton;
         private Button addButton;
+        private Button settingsButton;
+        private NotifyIcon tray;
+        private readonly HashSet<string> endingNotified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private Label lastCheck;
         private Label viewTitle;
         private Label viewSubtitle;
@@ -99,13 +102,13 @@ namespace SkinClubGiveawayDesktop
                     e.SuppressKeyPress = true;
                 }
             };
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception swallowed) { Diag.Swallow("Loading window icon", swallowed); }
 
             // Closing the app must also close every hidden browser render that it owns.
             // This prevents Edge/Chrome giveaway tabs from remaining in Task Manager.
             FormClosing += delegate
             {
-                try { if (autoTimer != null) autoTimer.Stop(); } catch { }
+                try { if (autoTimer != null) autoTimer.Stop(); } catch (Exception swallowed) { Diag.Swallow("Stopping auto-refresh timer", swallowed); }
                 BrowserProcessManager.Shutdown();
             };
 
@@ -115,7 +118,7 @@ namespace SkinClubGiveawayDesktop
             // every launch instead of loading the saved classification.
             BuildUi();
             ActivityLog.Write("APP", "Ready. Browser process limit: 5 total; one rendered page at a time; 30-second page timeout.");
-            logTimer.Interval = 1000;
+            logTimer.Interval = 500;
             logTimer.Tick += delegate { UpdateLogs(); };
             logTimer.Start();
             filterTimer.Interval = 120;
@@ -124,9 +127,82 @@ namespace SkinClubGiveawayDesktop
 
             if (automaticRefresh) Shown += async delegate { await RefreshAsync(false); };
             autoTimer = new System.Windows.Forms.Timer();
-            autoTimer.Interval = 10 * 60 * 1000;
+            autoTimer.Interval = AppSettings.Current.RefreshMinutes * 60 * 1000;
             autoTimer.Tick += async delegate { if (!scanning) await RefreshAsync(false); };
-            if (automaticRefresh) autoTimer.Start();
+            if (automaticRefresh)
+            {
+                autoTimer.Start();
+                BuildTray();
+            }
+        }
+
+        private void BuildTray()
+        {
+            tray = new NotifyIcon();
+            tray.Icon = Icon ?? SystemIcons.Application;
+            tray.Text = "SkinClub GW Finder";
+            tray.Visible = AppSettings.Current.Notifications;
+            tray.BalloonTipClicked += delegate { BringToFrontFromTray(); };
+            tray.MouseClick += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) BringToFrontFromTray(); };
+        }
+
+        // Also used when a second copy of the app is started: show this one instead.
+        public void BringToFrontFromTray()
+        {
+            if (IsDisposed) return;
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Show();
+            Activate();
+        }
+
+        private HashSet<string> ActiveKeys()
+        {
+            HashSet<string> keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (GiveawayItem i in data.Items)
+                if (!i.Joined && string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && i.Url != null) keys.Add(i.Url);
+            return keys;
+        }
+
+        // Only automatic refreshes notify: after a manual action the user is already looking at the result.
+        private void NotifyChanges(HashSet<string> before)
+        {
+            if (tray == null || !tray.Visible || !AppSettings.Current.Notifications) return;
+            List<GiveawayItem> fresh = data.Items.Where(delegate(GiveawayItem i)
+            {
+                return !i.Joined && i.Url != null && string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !before.Contains(i.Url);
+            }).ToList();
+            if (fresh.Count > 0)
+            {
+                string names = string.Join(", ", fresh.Take(4).Select(delegate(GiveawayItem i) { return i.Creator; }).ToArray());
+                tray.ShowBalloonTip(8000, fresh.Count == 1 ? "New giveaway" : fresh.Count + " new giveaways",
+                    names + (fresh.Count > 4 ? " and more" : ""), ToolTipIcon.Info);
+                return;
+            }
+
+            DateTime today = DateTime.Now.Date;
+            List<GiveawayItem> ending = data.Items.Where(delegate(GiveawayItem i)
+            {
+                DateTime when;
+                return !i.Joined && string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && i.Url != null &&
+                    DateTime.TryParse(i.Deadline, out when) && when.Date == today && !endingNotified.Contains(i.Url);
+            }).ToList();
+            if (ending.Count == 0) return;
+            foreach (GiveawayItem i in ending) endingNotified.Add(i.Url);
+            tray.ShowBalloonTip(8000, ending.Count == 1 ? "Giveaway ends today" : ending.Count + " giveaways end today",
+                string.Join(", ", ending.Take(4).Select(delegate(GiveawayItem i) { return i.Creator; }).ToArray()), ToolTipIcon.Warning);
+        }
+
+        private void OpenSettings()
+        {
+            using (SettingsForm form = new SettingsForm())
+            {
+                if (form.ShowDialog(this) != DialogResult.OK) return;
+                form.Apply();
+            }
+            autoTimer.Interval = AppSettings.Current.RefreshMinutes * 60 * 1000;
+            if (tray != null) tray.Visible = AppSettings.Current.Notifications;
+            DataStore.Save(data);
+            Render();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -142,6 +218,7 @@ namespace SkinClubGiveawayDesktop
                 filterTimer.Dispose();
                 logTimer.Dispose();
                 if (autoTimer != null) autoTimer.Dispose();
+                if (tray != null) { tray.Visible = false; tray.Dispose(); }
             }
             base.Dispose(disposing);
             if (disposing) { creatorFont.Dispose(); ticketFont.Dispose(); }
@@ -242,7 +319,7 @@ namespace SkinClubGiveawayDesktop
             logo.Size = new Size(36, 36);
             logo.Margin = new Padding(0, 12, 12, 0);
             logo.SizeMode = PictureBoxSizeMode.Zoom;
-            try { logo.Image = Icon.ExtractAssociatedIcon(Application.ExecutablePath).ToBitmap(); } catch { }
+            try { logo.Image = Icon.ExtractAssociatedIcon(Application.ExecutablePath).ToBitmap(); } catch (Exception swallowed) { Diag.Swallow("Loading header logo", swallowed); }
             brand.Controls.Add(logo);
 
             Label title = new Label();
@@ -271,10 +348,13 @@ namespace SkinClubGiveawayDesktop
             actions.BackColor = Bg;
             header.Controls.Add(actions, 1, 0);
 
+            settingsButton = MakeHeaderButton("Settings", 92, false);
             addButton = MakeHeaderButton("Add link", 96, false);
             refreshButton = MakeHeaderButton("Refresh", 92, false);
             deepButton = MakeHeaderButton("Deep Search", 124, true);
-            addButton.Margin = refreshButton.Margin = deepButton.Margin = new Padding(8, 0, 0, 0);
+            settingsButton.Margin = addButton.Margin = refreshButton.Margin = deepButton.Margin = new Padding(8, 0, 0, 0);
+            actions.Controls.Add(settingsButton);
+            settingsButton.Click += delegate { OpenSettings(); };
             actions.Controls.Add(addButton);
             actions.Controls.Add(refreshButton);
             actions.Controls.Add(deepButton);
@@ -374,7 +454,7 @@ namespace SkinClubGiveawayDesktop
             copyLogs.Click += delegate
             {
                 try { if (logText.TextLength > 0) Clipboard.SetText(logText.Text); }
-                catch { scanStatus.Text = "Clipboard is busy - try again"; }
+                catch (Exception swallowed) { Diag.Swallow("Copying logs to the clipboard", swallowed); scanStatus.Text = "Clipboard is busy - try again"; }
             };
             Button clearLogs = MakeHeaderButton("Clear", 80, false);
             clearLogs.Margin = new Padding(8, 0, 0, 0);
@@ -986,7 +1066,7 @@ namespace SkinClubGiveawayDesktop
 
                 if (columnName == "Link" && !string.IsNullOrWhiteSpace(url))
                 {
-                    try { Process.Start(url); } catch { }
+                    try { Process.Start(url); } catch (Exception swallowed) { Diag.Swallow("Opening " + url, swallowed); scanStatus.Text = "Could not open the link in your browser"; }
                 }
             }
         }
@@ -1033,7 +1113,7 @@ namespace SkinClubGiveawayDesktop
                         }
                     }));
                 }
-                catch { }
+                catch (Exception swallowed) { Diag.Swallow("Resetting status text", swallowed); }
             });
         }
 
@@ -1048,7 +1128,7 @@ namespace SkinClubGiveawayDesktop
                     copyToast = null;
                 }
             }
-            catch { }
+            catch (Exception swallowed) { Diag.Swallow("Removing copy toast", swallowed); }
 
             try
             {
@@ -1061,13 +1141,13 @@ namespace SkinClubGiveawayDesktop
                     {
                         if (object.ReferenceEquals(copyToast, toast)) copyToast = null;
                     }
-                    catch { }
+                    catch (Exception swallowed) { Diag.Swallow("Clearing copy toast", swallowed); }
                 };
                 Controls.Add(toast);
                 toast.BringToFront();
                 toast.Start();
             }
-            catch { }
+            catch (Exception swallowed) { Diag.Swallow("Showing copy toast", swallowed); }
         }
 
         private List<GiveawayItem> CurrentItems()
@@ -1087,6 +1167,7 @@ namespace SkinClubGiveawayDesktop
                     if (i.Joined) return false;
                     return string.Equals(i.Status, wanted, StringComparison.OrdinalIgnoreCase);
                 }).ToList();
+                if (showingHistory && AppSettings.Current.HistoryLatestOnly) list = GiveawayInfo.LatestPerCreator(list);
             }
 
             string query = filterBox == null ? "" : (filterBox.Text ?? "").Trim();
@@ -1096,28 +1177,25 @@ namespace SkinClubGiveawayDesktop
                     ? "Creator name"
                     : filterFieldBox.SelectedItem.ToString();
 
-                list = list.Where(delegate(GiveawayItem i)
-                {
-                    if (string.Equals(field, "Creator name", StringComparison.OrdinalIgnoreCase))
-                        return (i.Creator ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (string.Equals(field, "URL", StringComparison.OrdinalIgnoreCase))
-                        return (i.Url ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (string.Equals(field, "Ticket", StringComparison.OrdinalIgnoreCase))
-                        return (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (string.Equals(field, "Promocode", StringComparison.OrdinalIgnoreCase))
-                        return (i.PromoCode ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (string.Equals(field, "Minimum deposit", StringComparison.OrdinalIgnoreCase))
-                        return (i.MinimumDeposit ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (string.Equals(field, "Deadline", StringComparison.OrdinalIgnoreCase))
-                        return (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                // Pick the field once, not once per row.
+                Func<GiveawayItem, string> selector = null;
+                if (string.Equals(field, "Creator name", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.Creator; };
+                else if (string.Equals(field, "URL", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.Url; };
+                else if (string.Equals(field, "Ticket", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.Ticket; };
+                else if (string.Equals(field, "Promocode", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.PromoCode; };
+                else if (string.Equals(field, "Minimum deposit", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.MinimumDeposit; };
+                else if (string.Equals(field, "Deadline", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.Deadline; };
 
-                    return (i.Creator ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           (i.Url ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           (i.PromoCode ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           (i.MinimumDeposit ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-                }).ToList();
+                list.RemoveAll(delegate(GiveawayItem i)
+                {
+                    if (selector != null) return (selector(i) ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0;
+                    return !((i.Creator ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (i.Url ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (i.PromoCode ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (i.MinimumDeposit ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
+                });
             }
 
             list.Sort(CompareItems);
@@ -1175,7 +1253,10 @@ namespace SkinClubGiveawayDesktop
 
             if (cmp == 0)
                 cmp = string.Compare(a.Creator ?? "", b.Creator ?? "", StringComparison.OrdinalIgnoreCase);
-            return sortAscending ? cmp : -cmp;
+            cmp = sortAscending ? cmp : -cmp;
+            // Same value in the sorted column: show a creator's newest giveaway first.
+            if (cmp == 0) cmp = GiveawayInfo.GiveawayDate(b.Url).CompareTo(GiveawayInfo.GiveawayDate(a.Url));
+            return cmp;
         }
 
         private static readonly Regex TicketPairRegex = new Regex(@"^\s*([0-9,\.]+)\s*/\s*([0-9,\.]+)\s*$", RegexOptions.Compiled);
@@ -1288,7 +1369,8 @@ namespace SkinClubGiveawayDesktop
             filterPanelRef.Visible = !showingLogs;
             logActions.Visible = showingLogs;
             int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
-            int hc = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
+            List<GiveawayItem> endedItems = data.Items.Where(delegate(GiveawayItem i) { return string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase) && !i.Joined; }).ToList();
+            int hc = AppSettings.Current.HistoryLatestOnly ? GiveawayInfo.LatestPerCreator(endedItems).Count : endedItems.Count;
             int jc = data.Items.Count(delegate(GiveawayItem i) { return i.Joined; });
             lastCheck.Text = "Last checked: " + FormatTime(data.LastScan);
 
@@ -1304,7 +1386,9 @@ namespace SkinClubGiveawayDesktop
             else if (showingHistory)
             {
                 viewTitle.Text = "Giveaway history";
-                viewSubtitle.Text = "The 30 most recent ended giveaways  \u00b7  older ones are removed automatically";
+                viewSubtitle.Text = AppSettings.Current.HistoryLatestOnly
+                    ? "Each creator's latest ended giveaway  \u00b7  older ones stay saved (see Settings)"
+                    : "The " + AppSettings.Current.HistoryLimit + " most recent ended giveaways  \u00b7  older ones are removed automatically";
             }
             else
             {
@@ -1381,7 +1465,12 @@ namespace SkinClubGiveawayDesktop
             }
             try
             {
-                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/5  \u00b7  Queued pages " + Scanner.QueuedRenders + "  \u00b7  Latest 2,000 events";
+                int total = Scanner.ChecksTotal;
+                string checks = total > 0 && (scanning || Scanner.ActiveChecks > 0)
+                    ? "Page checks " + Scanner.ChecksDone + "/" + total + " (" + Scanner.ActiveChecks + " running)"
+                    : "Page checks idle";
+                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/5  \u00b7  Queued pages " + Scanner.QueuedRenders +
+                    "  \u00b7  " + checks + "  \u00b7  Latest 2,000 events";
             }
             catch { viewSubtitle.Text = "Browser count unavailable — check cleanup errors below"; }
         }
@@ -1408,12 +1497,24 @@ namespace SkinClubGiveawayDesktop
             // Scanner methods merge results into the AppData instance they receive.
             // Give the worker its own copy so the UI can safely switch tabs, sort,
             // search and copy values while a long scan is running.
-            JavaScriptSerializer js = new JavaScriptSerializer();
-            js.MaxJsonLength = int.MaxValue;
-            string json = js.Serialize(source ?? new AppData());
-            AppData clone = js.Deserialize<AppData>(json);
-            if (clone == null) clone = new AppData();
-            if (clone.Items == null) clone.Items = new List<GiveawayItem>();
+            // A direct field copy: no JSON round-trip, so no temporary serialized string.
+            AppData clone = new AppData();
+            if (source == null) return clone;
+            clone.LastScan = source.LastScan;
+            clone.LastDeepScan = source.LastDeepScan;
+            if (source.Items != null)
+            {
+                foreach (GiveawayItem i in source.Items)
+                {
+                    if (i == null) continue;
+                    clone.Items.Add(new GiveawayItem
+                    {
+                        Creator = i.Creator, Url = i.Url, Status = i.Status, Ticket = i.Ticket, PromoCode = i.PromoCode,
+                        MinimumDeposit = i.MinimumDeposit, Deadline = i.Deadline, LastChecked = i.LastChecked, Source = i.Source,
+                        Error = i.Error, Joined = i.Joined, JoinedAt = i.JoinedAt, HistorySince = i.HistorySince, RenderedAt = i.RenderedAt
+                    });
+                }
+            }
             return clone;
         }
 
@@ -1454,6 +1555,8 @@ namespace SkinClubGiveawayDesktop
                 // Some giveaway pages require a headless Chromium/CDP fallback.
                 // Run the entire scan away from the WinForms UI thread so Chromium
                 // startup/parsing can never make Windows show the spinning busy cursor.
+                HashSet<string> before = ActiveKeys();
+                bool firstScan = string.IsNullOrEmpty(data.LastScan);
                 AppData scanData = CloneDataForScan(data);
                 AppData refreshed = await Task.Run(async delegate
                 {
@@ -1462,13 +1565,20 @@ namespace SkinClubGiveawayDesktop
                 if (IsDisposed || Disposing) return;
                 data = refreshed;
                 Render();
+                if (!manual && !firstScan) NotifyChanges(before);
             }
             catch (Exception ex)
             {
                 ActivityLog.Write("ERROR", "Refresh failed: " + ex.Message);
                 if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Refresh failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
-            finally { SetScanning(false, ""); }
+            finally { SetScanning(false, ""); ReleaseScanMemory(); }
+        }
+
+        // Hand the memory used by downloaded pages back to Windows once a scan is over.
+        private static void ReleaseScanMemory()
+        {
+            Task.Run(new Action(MemoryTrim.Run));
         }
 
         private async Task DeepSearchAsync()
@@ -1495,7 +1605,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("ERROR", "Deep Search failed: " + ex.Message);
                 if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Deep Search failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
-            finally { SetScanning(false, ""); }
+            finally { SetScanning(false, ""); ReleaseScanMemory(); }
         }
 
         private async Task AddLinkAsync()

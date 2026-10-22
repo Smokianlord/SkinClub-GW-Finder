@@ -107,15 +107,33 @@ namespace SkinClubGiveawayDesktop
         [DllImport("kernel32.dll")]
         private static extern bool CloseHandle(IntPtr handle);
 
+        private static int lastCount;
+
         private static int CountLocked()
         {
-            if (activeJob == IntPtr.Zero) return 0;
+            if (activeJob == IntPtr.Zero) { lastCount = 0; return 0; }
             Accounting info;
             if (!QueryInformationJobObject(activeJob, 1, out info, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot verify browser process count");
-            return (int)info.ActiveProcesses;
+            lastCount = (int)info.ActiveProcesses;
+            return lastCount;
         }
-        public static int ActiveProcessCount { get { lock (Gate) { return CountLocked(); } } }
+
+        // Called by the UI timer. Browser cleanup holds Gate while it waits for processes to exit
+        // (up to 5 seconds); the UI must not freeze behind that, so fall back to the last count read.
+        public static int ActiveProcessCount
+        {
+            get
+            {
+                bool taken = false;
+                try
+                {
+                    Monitor.TryEnter(Gate, 100, ref taken);
+                    return taken ? CountLocked() : Volatile.Read(ref lastCount);
+                }
+                finally { if (taken) Monitor.Exit(Gate); }
+            }
+        }
 
         // Never run an uncontained browser. Assignment happens before its first instruction,
         // so every descendant inherits this per-page job, including if the root exits first.

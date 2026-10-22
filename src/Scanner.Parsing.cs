@@ -268,7 +268,7 @@ namespace SkinClubGiveawayDesktop
                         if (dt.Year >= DateTime.Now.Year - 1 && dt.Year <= DateTime.Now.Year + 5 && dt.Date >= DateTime.Now.Date.AddDays(-1))
                             return dt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
                     }
-                    catch { }
+                    catch (Exception swallowed) { Diag.Swallow("Reading epoch deadline", swallowed); }
                 }
             }
 

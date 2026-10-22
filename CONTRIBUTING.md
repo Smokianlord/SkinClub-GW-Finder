@@ -23,6 +23,8 @@ Describe the workflow you want to improve and why it would be useful. If the fea
 
 Keep changes focused. Avoid unrelated UI or parser rewrites in the same pull request unless they are required for the fix.
 
+Source lives in `src/`; build with `scripts/build.ps1` (or `BUILD_EXE.bat`) and run `tests/run.ps1` and `tests/run-browser.ps1` before opening a pull request.
+
 Before submitting:
 
 1. Build and launch the app on Windows.
