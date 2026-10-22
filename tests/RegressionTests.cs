@@ -61,6 +61,34 @@ static class RegressionTests
     { return target.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance).GetValue(target); }
     static object Call(object target, string name, params object[] args)
     { return target.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance).Invoke(target, args); }
+    // No two controls may overlap, none may leave the window, and wrapped text must fit its label.
+    static void CheckDialogLayout(Form form, string name)
+    {
+        using (form)
+        {
+            form.StartPosition = FormStartPosition.Manual;
+            form.Location = new Point(-3000, -3000);
+            form.Show();
+            Application.DoEvents();
+            System.Collections.Generic.List<Control> controls = form.Controls.Cast<Control>().Where(c => c.Visible).ToList();
+            string problem = null;
+            for (int i = 0; i < controls.Count && problem == null; i++)
+            {
+                Control a = controls[i];
+                if (!form.ClientRectangle.Contains(a.Bounds)) problem = Describe(a) + " leaves the window";
+                for (int j = i + 1; j < controls.Count && problem == null; j++)
+                    if (a.Bounds.IntersectsWith(controls[j].Bounds)) problem = Describe(a) + " overlaps " + Describe(controls[j]);
+                Label label = a as Label;
+                if (problem == null && label != null && !label.AutoSize &&
+                    TextRenderer.MeasureText(label.Text, label.Font, new Size(label.Width, 0), TextFormatFlags.WordBreak).Height > label.Height)
+                    problem = Describe(a) + " is cut off";
+            }
+            Check(problem == null, name + " has no overlapping, clipped or off-screen controls" + (problem == null ? "" : ": " + problem));
+            form.Close();
+        }
+    }
+    static string Describe(Control c) { return c.GetType().Name + " '" + (c.Text.Length > 30 ? c.Text.Substring(0, 30) : c.Text) + "'"; }
+
     [STAThread]
     static void Main()
     {
@@ -230,6 +258,8 @@ static class RegressionTests
         long logVersion = -1;
         string boundedLog = ActivityLog.Snapshot(ref logVersion);
         Check(boundedLog.Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries).Length == 2000, "Session log cannot grow beyond 2000 entries");
+        CheckDialogLayout(new SettingsForm(), "Settings dialog");
+        CheckDialogLayout(new AddLinkForm(), "Add link dialog");
         Console.WriteLine(checks + " checks passed. Artifacts: " + folder);
     }
 }

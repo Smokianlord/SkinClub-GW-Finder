@@ -19,7 +19,7 @@ namespace SkinClubGiveawayDesktop
         public SettingsForm()
         {
             Text = "Settings";
-            ClientSize = new Size(560, 448);
+            ClientSize = new Size(560, 494);
             StartPosition = FormStartPosition.CenterParent;
             BackColor = Ui.Surface;
             ForeColor = Ui.Text;
@@ -83,7 +83,7 @@ namespace SkinClubGiveawayDesktop
             Controls.Add(browse);
 
             UiButton openFile = UiButton.Create("Open settings.json", UiButtonKind.Ghost, 160);
-            openFile.Location = new Point(28, 346);
+            openFile.Location = new Point(28, 342);
             openFile.BackColor = Ui.Surface;
             openFile.Click += delegate
             {
@@ -96,17 +96,19 @@ namespace SkinClubGiveawayDesktop
             };
             Controls.Add(openFile);
 
+            // Wraps onto two lines and has its own row, clear of the buttons below.
             Label hint = new Label();
-            hint.Text = "settings.json also lets you add creators (ExtraCreators) and tune timeouts. Restart after editing it.";
-            hint.SetBounds(28, 382, 504, 18);
+            hint.AutoSize = false;
+            hint.Text = "settings.json also lets you add creators (ExtraCreators) and tune timeouts and limits. Restart the app after editing it.";
+            hint.SetBounds(28, 390, 504, 38);
             hint.ForeColor = Ui.Muted;
             Controls.Add(hint);
 
             UiButton cancel = UiButton.Create("Cancel", UiButtonKind.Ghost, 96);
-            cancel.Location = new Point(28 + 504 - 96 - 12 - 96, 404);
+            cancel.Location = new Point(28 + 504 - 96 - 12 - 96, 442);
             cancel.DialogResult = DialogResult.Cancel;
             UiButton save = UiButton.Create("Save", UiButtonKind.Primary, 96);
-            save.Location = new Point(28 + 504 - 96, 404);
+            save.Location = new Point(28 + 504 - 96, 442);
             save.DialogResult = DialogResult.OK;
             cancel.BackColor = save.BackColor = Ui.Surface;
             Controls.Add(cancel);
