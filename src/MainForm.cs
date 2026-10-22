@@ -224,25 +224,6 @@ namespace SkinClubGiveawayDesktop
             if (disposing) { creatorFont.Dispose(); ticketFont.Dispose(); }
         }
 
-        private void RepairLegacyStatuses()
-        {
-            bool changed = false;
-            foreach (GiveawayItem i in data.Items)
-            {
-                if (!string.Equals(i.Status, "ended", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!string.Equals((i.Deadline ?? "").Trim(), "Ended", StringComparison.OrdinalIgnoreCase)) continue;
-                Match m = Regex.Match(i.Ticket ?? "", @"^\s*([0-9,]+)\s*/\s*([0-9,]+)\s*$");
-                if (!m.Success) continue;
-                int remaining;
-                if (!int.TryParse(m.Groups[1].Value.Replace(",", ""), out remaining)) continue;
-                if (remaining <= 0) continue;
-                i.Status = "unknown";
-                i.Deadline = "-";
-                changed = true;
-            }
-            if (changed) DataStore.Save(data);
-        }
-
         private static void RoundControl(Control control, int radius)
         {
             EventHandler update = delegate
@@ -1066,7 +1047,11 @@ namespace SkinClubGiveawayDesktop
 
                 if (columnName == "Link" && !string.IsNullOrWhiteSpace(url))
                 {
-                    try { Process.Start(url); } catch (Exception swallowed) { Diag.Swallow("Opening " + url, swallowed); scanStatus.Text = "Could not open the link in your browser"; }
+                    // Only ever open web links: a hand-edited data.json must not be able to launch a program.
+                    Uri link;
+                    if (!Uri.TryCreate(url, UriKind.Absolute, out link) || (link.Scheme != Uri.UriSchemeHttp && link.Scheme != Uri.UriSchemeHttps))
+                    { scanStatus.Text = "Not a web link, not opened"; return; }
+                    try { Process.Start(link.AbsoluteUri); } catch (Exception swallowed) { Diag.Swallow("Opening " + url, swallowed); scanStatus.Text = "Could not open the link in your browser"; }
                 }
             }
         }
@@ -1571,7 +1556,9 @@ namespace SkinClubGiveawayDesktop
                     return await Scanner.RefreshSavedAsync(scanData);
                 });
                 if (IsDisposed || Disposing) return;
-                data = refreshed;
+                // Keep what was changed while the scan ran (a Join click, an added link).
+                Scanner.ApplyScanResults(data, refreshed);
+                DataStore.Save(data);
                 Render();
                 if (!manual && !firstScan) NotifyChanges(before);
             }
@@ -1593,6 +1580,9 @@ namespace SkinClubGiveawayDesktop
         {
             if (scanning) return;
             SetScanning(true, "Deep searching partners, YouTube, Telegram and social sources...");
+            string doneText = null;
+            Color doneColor = Success;
+            int doneMs = 2200;
             try
             {
                 AppData scanData = CloneDataForScan(data);
@@ -1601,19 +1591,21 @@ namespace SkinClubGiveawayDesktop
                     return await Scanner.DeepScanAsync(scanData);
                 });
                 if (IsDisposed || Disposing) return;
-                data = scanned;
+                // Keep what was changed while the scan ran (a Join click, an added link).
+                Scanner.ApplyScanResults(data, scanned);
+                DataStore.Save(data);
                 Render();
                 int ac = data.Items.Count(delegate(GiveawayItem i) { return string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !i.Joined; });
                 // Never present a scan as complete if some pages or sources could not be read.
                 int unreachable = Scanner.LastUnreachable;
                 int sourceFailures = Scanner.LastDiscoveryFailures;
                 bool incomplete = unreachable > 0 || sourceFailures > 0;
-                scanStatus.Text = "Deep Search complete  •  " + ac + " active giveaway" + (ac == 1 ? "" : "s") +
+                doneText = "Deep Search complete  •  " + ac + " active giveaway" + (ac == 1 ? "" : "s") +
                     (unreachable > 0 ? "  •  " + unreachable + " page" + (unreachable == 1 ? "" : "s") + " could not be reached" : "") +
                     (sourceFailures > 0 ? "  •  " + sourceFailures + " source" + (sourceFailures == 1 ? "" : "s") + " unreadable" : "") +
                     (incomplete ? " (see Logs, run again)" : "");
-                scanStatus.ForeColor = incomplete ? Warning : Success;
-                await Task.Delay(incomplete ? 10000 : 2200);
+                doneColor = incomplete ? Warning : Success;
+                doneMs = incomplete ? 10000 : 2200;
             }
             catch (Exception ex)
             {
@@ -1621,6 +1613,15 @@ namespace SkinClubGiveawayDesktop
                 if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Deep Search failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally { SetScanning(false, ""); ReleaseScanMemory(); }
+
+            // Show the result after the buttons are usable again, instead of keeping them disabled for it.
+            if (doneText != null && !IsDisposed && !Disposing)
+            {
+                scanStatus.Text = doneText;
+                scanStatus.ForeColor = doneColor;
+                await Task.Delay(doneMs);
+                if (!scanning && !IsDisposed && !Disposing) { scanStatus.Text = "Ready"; scanStatus.ForeColor = Muted; }
+            }
         }
 
         private async Task AddLinkAsync()

@@ -344,6 +344,11 @@ namespace SkinClubGiveawayDesktop
                 // Page checks start immediately and overlap with the slower social/search
                 // discovery, instead of waiting for every source to finish first. Pages found
                 // later are queued as they arrive; a URL is only ever checked once.
+                // Giveaways already saved as ended do not change; fetching them again every time only
+                // adds load (Refresh skips them for the same reason).
+                HashSet<string> endedKeys = new HashSet<string>(
+                    data.Items.Where(delegate(GiveawayItem x) { return string.Equals(x.Status, "ended", StringComparison.OrdinalIgnoreCase); })
+                              .Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
                 HashSet<string> queued = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 List<Task<GiveawayItem>> validations = new List<Task<GiveawayItem>>();
                 SemaphoreSlim throttle = new SemaphoreSlim(AppSettings.Current.ProbeConcurrency, AppSettings.Current.ProbeConcurrency);
@@ -353,7 +358,7 @@ namespace SkinClubGiveawayDesktop
                     {
                         if (string.IsNullOrWhiteSpace(c.Url)) continue;
                         string key = GiveawayKey(c.Url);
-                        if (key.Length == 0 || !queued.Add(key)) continue;
+                        if (key.Length == 0 || endedKeys.Contains(key) || !queued.Add(key)) continue;
                         Interlocked.Increment(ref checksTotal);
                         validations.Add(ValidateAsync(new Candidate(c.Creator, CleanDiscoveredUrl(c.Url), c.Source), throttle));
                     }
@@ -427,7 +432,13 @@ namespace SkinClubGiveawayDesktop
 
         public static async Task<GiveawayItem> ValidateOneAsync(string creator, string url)
         {
-            if (!DirectUrlRegex.IsMatch(url)) throw new ArgumentException("Use a direct dated creator giveaway URL, for example https://creator.club/010926/");
+            // The whole text must be one giveaway link. Matching anywhere inside it would let extra text
+            // (spaces, quotes, browser switches) reach the command line of the browser that renders the page.
+            string trimmed = (url ?? "").Trim();
+            Match whole = DirectUrlRegex.Match(trimmed);
+            if (!whole.Success || whole.Index != 0 || whole.Length != trimmed.Length)
+                throw new ArgumentException("Use a direct dated creator giveaway URL, for example https://creator.club/010926/");
+            url = CleanDiscoveredUrl(whole.Value);
             SemaphoreSlim throttle = new SemaphoreSlim(1, 1);
             ResetChecks(1);
             phase = "Checking the added link";

@@ -210,6 +210,36 @@ static class RegressionTests
         GiveawayItem absent = Scanner.ValidateAsync(new Candidate("D", "https://flaky-d.club/010926/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
         Check(!absent.Unreachable && missing.Calls == 1, "A real 404 is final and is not retried");
 
+        // A scan runs on a copy: a Join click made meanwhile must survive, and new finds must be added.
+        AppData liveData = new AppData();
+        liveData.Items.Add(new GiveawayItem { Creator = "X", Url = "https://x.club/011026/", Status = "active", Ticket = "5 / 10", Joined = true, JoinedAt = "2026-10-23T00:00:00Z" });
+        liveData.Items.Add(new GiveawayItem { Creator = "Added", Url = "https://added-by-user.club/011026/", Status = "active", Ticket = "1 / 2" });
+        AppData scannedCopy = new AppData();
+        scannedCopy.Items.Add(new GiveawayItem { Creator = "X", Url = "https://x.club/011026/", Status = "ended", Ticket = "0 / 10", Deadline = "Ended", Joined = false });
+        scannedCopy.Items.Add(new GiveawayItem { Creator = "Found", Url = "https://found.club/011026/", Status = "active", Ticket = "9 / 9" });
+        scannedCopy.LastScan = "2026-10-23T01:00:00Z";
+        Scanner.ApplyScanResults(liveData, scannedCopy);
+        GiveawayItem mergedX = liveData.Items.First(i => i.Url == "https://x.club/011026/");
+        Check(mergedX.Joined && mergedX.JoinedAt != null && mergedX.Status == "ended" && mergedX.Ticket == "0 / 10", "A scan keeps a Join made while it ran and still applies its findings");
+        Check(liveData.Items.Any(i => i.Url == "https://added-by-user.club/011026/") && liveData.Items.Any(i => i.Url == "https://found.club/011026/") && liveData.Items.Count == 3 && liveData.LastScan == scannedCopy.LastScan, "A scan keeps links added meanwhile and adds new finds without duplicates");
+
+        // An ended giveaway is only reopened by a real, future deadline.
+        AppData reopen = new AppData();
+        reopen.Items.Add(new GiveawayItem { Creator = "R", Url = "https://reopen.club/010926/", Status = "ended", Ticket = "436 / 625", Deadline = "Ended" });
+        Scanner.MergeOne(reopen, new GiveawayItem { Creator = "R", Url = "https://reopen.club/010926/", Status = "active", Ticket = "436 / 625", Deadline = "-", LastChecked = DateTime.UtcNow.ToString("o") });
+        Check(reopen.Items[0].Status == "ended", "An ended giveaway is not reopened by a page that merely lacks an ended signal");
+        Scanner.MergeOne(reopen, new GiveawayItem { Creator = "R", Url = "https://reopen.club/010926/", Status = "active", Ticket = "436 / 625", Deadline = DateTime.Now.AddDays(5).ToString("MMM d, yyyy").ToUpperInvariant(), LastChecked = DateTime.UtcNow.ToString("o") });
+        Check(reopen.Items[0].Status == "active", "An extended giveaway with a future deadline is reopened");
+
+        // Typed links: the whole text must be one giveaway link.
+        bool rejectedExtraText = false;
+        try { Scanner.ValidateOneAsync("", "https://evil.club/010926/ --user-data-dir=C:\\temp\\x https://real.club/010926/").GetAwaiter().GetResult(); }
+        catch (ArgumentException) { rejectedExtraText = true; }
+        Check(rejectedExtraText, "A typed link with extra text around it is rejected");
+        clientField.SetValue(null, new HttpClient(new FixedPageHandler(endedHtml)));
+        GiveawayItem typedOk = Scanner.ValidateOneAsync("", "  https://typed-ok.club/010926  ").GetAwaiter().GetResult();
+        Check(typedOk.Status == "ended" && typedOk.Url == "https://typed-ok.club/010926/", "A plain typed link is accepted and normalised");
+
         typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, new HttpClient(new RedirectHandler()));
         GiveawayItem redirected = Scanner.ValidateAsync(new Candidate("Alpha", data.Items[0].Url, "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
         Check(redirected.Url == data.Items[0].Url && redirected.Status == "unknown" && redirected.Error != null, "Redirect preserves identity and reports failed validation");

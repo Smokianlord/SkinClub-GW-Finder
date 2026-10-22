@@ -56,33 +56,36 @@ namespace SkinClubGiveawayDesktop
             return null;
         }
 
-        private static int GetFreeTcpPort()
-        {
-            TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            try
-            {
-                return ((IPEndPoint)listener.LocalEndpoint).Port;
-            }
-            finally { listener.Stop(); }
-        }
-
         private static string JsonStringValue(object value)
         {
             return value == null ? "" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        private static async Task<string> DevToolsEvaluateAsync(string websocketUrl, string expression, CancellationToken token)
+        // One DevTools connection per rendered page, reused for every evaluation. Opening a fresh
+        // WebSocket for each check meant about 40 connects per page.
+        private sealed class DevToolsSession : IDisposable
         {
-            if (string.IsNullOrWhiteSpace(websocketUrl)) return "";
-            using (ClientWebSocket ws = new ClientWebSocket())
-            {
-                ws.Options.Proxy = null;
-                await ws.ConnectAsync(new Uri(websocketUrl), token);
+            private readonly ClientWebSocket ws = new ClientWebSocket();
+            private readonly JavaScriptSerializer js = new JavaScriptSerializer();
+            private int nextId;
 
-                JavaScriptSerializer js = new JavaScriptSerializer();
+            public static async Task<DevToolsSession> OpenAsync(string websocketUrl, CancellationToken token)
+            {
+                DevToolsSession session = new DevToolsSession();
+                try
+                {
+                    session.ws.Options.Proxy = null;
+                    await session.ws.ConnectAsync(new Uri(websocketUrl), token);
+                    return session;
+                }
+                catch { session.Dispose(); throw; }
+            }
+
+            public async Task<string> EvaluateAsync(string expression, CancellationToken token)
+            {
+                int id = ++nextId;
                 Dictionary<string, object> payload = new Dictionary<string, object>();
-                payload["id"] = 1;
+                payload["id"] = id;
                 payload["method"] = "Runtime.evaluate";
                 Dictionary<string, object> parameters = new Dictionary<string, object>();
                 parameters["expression"] = expression;
@@ -95,24 +98,23 @@ namespace SkinClubGiveawayDesktop
 
                 using (MemoryStream ms = new MemoryStream())
                 {
-                    byte[] buffer = new byte[8192];
+                    byte[] buffer = new byte[16384];
                     DateTime expires = DateTime.UtcNow.AddSeconds(8);
                     while (DateTime.UtcNow < expires && ws.State == WebSocketState.Open)
                     {
-                        WebSocketReceiveResult rr;
-                        rr = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
-
+                        WebSocketReceiveResult rr = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
                         if (rr.MessageType == WebSocketMessageType.Close) break;
                         ms.Write(buffer, 0, rr.Count);
                         if (!rr.EndOfMessage) continue;
 
-                        string message = Encoding.UTF8.GetString(ms.ToArray());
+                        string message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
                         ms.SetLength(0);
                         try
                         {
                             Dictionary<string, object> root = js.Deserialize<Dictionary<string, object>>(message);
                             object idObj;
-                            if (!root.TryGetValue("id", out idObj) || Convert.ToInt32(idObj) != 1) continue;
+                            // Browser events and answers to earlier requests carry other ids: skip them.
+                            if (!root.TryGetValue("id", out idObj) || Convert.ToInt32(idObj) != id) continue;
                             object resultObj;
                             if (!root.TryGetValue("result", out resultObj)) return "";
                             Dictionary<string, object> result = resultObj as Dictionary<string, object>;
@@ -128,10 +130,11 @@ namespace SkinClubGiveawayDesktop
                         catch (Exception swallowed) { Diag.Swallow("Reading DevTools result", swallowed); return ""; }
                     }
                 }
+                return "";
             }
-            return "";
-        }
 
+            public void Dispose() { ws.Dispose(); }
+        }
         private static RenderedFields CloneRenderedFields(RenderedFields source)
         {
             RenderedFields copy = new RenderedFields();
@@ -385,21 +388,33 @@ namespace SkinClubGiveawayDesktop
                 // taking one snapshot too early. Keep polling after the deadline appears so
                 // promocode/minimum-deposit fields that render slightly later are not missed.
                 DateTime renderDeadline = DateTime.UtcNow.AddSeconds(10);
-                while (DateTime.UtcNow < renderDeadline)
+                using (DevToolsSession session = await DevToolsSession.OpenAsync(websocketUrl, token))
                 {
-                    string renderedData = await DevToolsEvaluateAsync(websocketUrl, expression, token);
-                    string metadata = await DevToolsEvaluateAsync(websocketUrl, metadataExpression, token);
-
-                    if (!string.IsNullOrWhiteSpace(renderedData) || !string.IsNullOrWhiteSpace(metadata))
+                    while (DateTime.UtcNow < renderDeadline)
                     {
-                        string promo = PromoCodeFromText(renderedData);
-                        if (promo == "-") promo = PromoCodeFromText(metadata);
-                        if (promo != "-") best.PromoCode = promo;
+                        string renderedData = await session.EvaluateAsync(expression, token);
 
-                        string promoForDeposit = promo != "-" ? promo : best.PromoCode;
-                        string minDeposit = MinimumDepositFromText(renderedData, promoForDeposit);
-                        if (minDeposit == "-") minDeposit = MinimumDepositFromText(metadata, promoForDeposit);
+                        string promo = PromoCodeFromText(renderedData);
+                        if (promo != "-") best.PromoCode = promo;
+                        string minDeposit = MinimumDepositFromText(renderedData, best.PromoCode);
                         if (minDeposit != "-") best.MinimumDeposit = minDeposit;
+
+                        // The whole-page metadata scan is heavy (every element, every script); run it only
+                        // while the promocode or deposit is still missing after reading the visible text.
+                        if (best.PromoCode == "-" || best.MinimumDeposit == "-")
+                        {
+                            string metadata = await session.EvaluateAsync(metadataExpression, token);
+                            if (best.PromoCode == "-")
+                            {
+                                string fromMetadata = PromoCodeFromText(metadata);
+                                if (fromMetadata != "-") best.PromoCode = fromMetadata;
+                            }
+                            if (best.MinimumDeposit == "-")
+                            {
+                                string depositFromMetadata = MinimumDepositFromText(metadata, best.PromoCode);
+                                if (depositFromMetadata != "-") best.MinimumDeposit = depositFromMetadata;
+                            }
+                        }
 
                         // The visible TIME TO COMPLETION timer is authoritative. Never use
                         // hidden DOM state for the deadline because it previously caused
@@ -414,8 +429,8 @@ namespace SkinClubGiveawayDesktop
                             ActivityLog.Write("RENDER", "Metadata complete: " + url);
                             return CloneRenderedFields(best);
                         }
+                        await Task.Delay(500, token);
                     }
-                    await Task.Delay(500, token);
                 }
                 StoreRenderedCache(url, best);
                 ActivityLog.Write("RENDER", "Finished with partial metadata: " + url);

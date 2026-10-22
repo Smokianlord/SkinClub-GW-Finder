@@ -287,7 +287,9 @@ namespace SkinClubGiveawayDesktop
 
         private static HttpClient MakeClient()
         {
-            ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
+            // TLS 1.2 plus 1.3 where Windows supports it; a site that only speaks 1.3 would otherwise be unreachable.
+            try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)(3072 | 12288); }
+            catch (NotSupportedException) { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; }
             ServicePointManager.DefaultConnectionLimit = 128;
             HttpClientHandler h = new HttpClientHandler();
             h.AllowAutoRedirect = true;

@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- Fixed: Portuguese giveaway pages show "FIM" for "ended"; the app did not know the word and a refresh reopened ended giveaways. "FIM" and the "ended" word in several other languages are now recognised, and an ended giveaway is only reopened by a real future deadline.
+- Fixed: a Join click (or an added link) made while a scan was running was overwritten when the scan finished. Scan results are now merged into the live data.
+- Fixed: the Settings dialog note overlapped the buttons; dialogs now have a layout test.
+- Logs tab: shows the scan phase, sources read, page progress and running browsers instead of a bare process count.
+- Security and robustness: a typed link must be one giveaway link and nothing else, only web links are opened, TLS 1.3 is allowed where Windows supports it, and dead code was removed.
+- Faster and lighter: browser pages use one DevTools connection instead of about 40, the heavy whole-page scan only runs while a promocode or deposit is still missing, and Deep Search no longer re-downloads giveaways already saved as ended. The status message no longer keeps the buttons disabled for several seconds after a scan.
+
 ## [1.5.0] - 2026-10-23
 
 - Only one copy of the app can run; starting another brings the first to the front.

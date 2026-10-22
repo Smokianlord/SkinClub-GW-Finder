@@ -156,6 +156,48 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
+        // A scan works on a copy of the data. When it finishes, fold its findings into the live data
+        // instead of replacing it, so anything the user did meanwhile (joining a giveaway, adding a
+        // link) is kept. The scan owns what it read from the pages; the user owns Joined/JoinedAt.
+        public static void ApplyScanResults(AppData live, AppData scanned)
+        {
+            Dictionary<string, GiveawayItem> byKey = new Dictionary<string, GiveawayItem>(StringComparer.OrdinalIgnoreCase);
+            foreach (GiveawayItem i in live.Items)
+                if (i != null && !string.IsNullOrWhiteSpace(i.Url)) byKey[GiveawayKey(i.Url)] = i;
+
+            foreach (GiveawayItem s in scanned.Items)
+            {
+                if (s == null || string.IsNullOrWhiteSpace(s.Url)) continue;
+                GiveawayItem current;
+                if (!byKey.TryGetValue(GiveawayKey(s.Url), out current))
+                {
+                    live.Items.Add(s);
+                    byKey[GiveawayKey(s.Url)] = s;
+                    continue;
+                }
+                current.Creator = s.Creator;
+                current.Url = s.Url;
+                current.Status = s.Status;
+                current.Ticket = s.Ticket;
+                current.PromoCode = s.PromoCode;
+                current.MinimumDeposit = s.MinimumDeposit;
+                current.Deadline = s.Deadline;
+                current.LastChecked = s.LastChecked;
+                current.Source = s.Source;
+                current.Error = s.Error;
+                current.RenderedAt = s.RenderedAt;
+                current.HistorySince = s.HistorySince;
+            }
+            live.LastScan = scanned.LastScan;
+            live.LastDeepScan = scanned.LastDeepScan;
+        }
+
+        private static bool HasFutureDeadline(GiveawayItem item)
+        {
+            DateTime when;
+            return item != null && DateTime.TryParse(item.Deadline, out when) && when.Date >= DateTime.Now.Date;
+        }
+
         private static void MergeItems(AppData data, IEnumerable<GiveawayItem> updates)
         {
             Dictionary<string, GiveawayItem> byUrl = new Dictionary<string, GiveawayItem>(StringComparer.OrdinalIgnoreCase);
@@ -172,9 +214,15 @@ namespace SkinClubGiveawayDesktop
                     // A failed/ambiguous check must not move an already-known giveaway
                     // out of Active or History. Only a successful active/ended parse may
                     // change its classification.
-                    if (u.Status == "unknown" &&
+                    // An ended giveaway is also not reopened by a page that merely lacks an "ended"
+                    // signal (a missing deadline, an unfamiliar word for "end"): it needs a real,
+                    // future deadline, which is what an extended giveaway would show.
+                    bool endedStaysEnded = u.Status == "active" &&
+                        string.Equals(existing.Status, "ended", StringComparison.OrdinalIgnoreCase) && !HasFutureDeadline(u);
+                    if (endedStaysEnded ||
+                        (u.Status == "unknown" &&
                         (string.Equals(existing.Status, "active", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(existing.Status, "ended", StringComparison.OrdinalIgnoreCase)))
+                         string.Equals(existing.Status, "ended", StringComparison.OrdinalIgnoreCase))))
                     {
                         // Keep the known classification, but do not discard metadata that the
                         // rendered-page fallback successfully recovered. This is especially
