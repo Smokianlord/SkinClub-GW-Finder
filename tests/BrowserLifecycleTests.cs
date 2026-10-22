@@ -23,7 +23,7 @@ static class BrowserLifecycleTests
     {
         if (args.Length > 0 && args[0] == "--sleep") { Thread.Sleep(60000); return; }
         // These checks prove Windows enforces the configured limit, so pin it instead of using the default.
-        AppSettings.Current = new AppSettings { BrowserProcessLimit = 5 };
+        AppSettings.Current = new AppSettings { BrowserProcessLimit = 5, BrowserConcurrency = 1 };
         if (args.Length > 0 && args[0] == "--tree")
         {
             for (int i = 0; i < 12; i++)
@@ -74,11 +74,30 @@ static class BrowserLifecycleTests
             Check(failed && BrowserProcessManager.ActiveProcessCount == 0, "Failed launch leaves no browser job or child behind");
 
             root = BrowserProcessManager.StartHidden(Assembly.GetExecutingAssembly().Location, "--sleep");
-            ((Timer)typeof(BrowserProcessManager).GetField("watchdog", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null)).Change(100, Timeout.Infinite);
+            BrowserProcessManager.SetWatchdogDueTime(root, 100);
             deadline.Restart();
             while (BrowserProcessManager.ActiveProcessCount > 0 && deadline.ElapsedMilliseconds < 5000) Thread.Sleep(25);
             Check(BrowserProcessManager.ActiveProcessCount == 0, "Watchdog terminates stalled browser work while the app remains open");
             BrowserProcessManager.KillProcessTree(root);
+
+            // Parallel browsers: each runs in its own job, and cleaning one leaves the other alone.
+            AppSettings.Current = new AppSettings { BrowserProcessLimit = 5, BrowserConcurrency = 2 };
+            Process first = BrowserProcessManager.StartHidden(Assembly.GetExecutingAssembly().Location, "--sleep");
+            Process second = BrowserProcessManager.StartHidden(Assembly.GetExecutingAssembly().Location, "--sleep");
+            Thread.Sleep(300); // let both processes finish starting before counting
+            int both = BrowserProcessManager.ActiveProcessCount; // each group also holds a console-host helper
+            Check(both >= 2 && !first.HasExited && !second.HasExited, "Two browser groups run side by side when configured");
+            bool thirdBlocked = false;
+            try { BrowserProcessManager.StartHidden(Assembly.GetExecutingAssembly().Location, "--sleep"); }
+            catch (InvalidOperationException) { thirdBlocked = true; }
+            Check(thirdBlocked, "A browser beyond the configured concurrency cannot start");
+            BrowserProcessManager.KillProcessTree(first);
+            int remainingCount = BrowserProcessManager.ActiveProcessCount;
+            Check(remainingCount > 0 && remainingCount < both && !second.HasExited, "Cleaning one browser group leaves the other running");
+            BrowserProcessManager.KillProcessTree(second);
+            Check(BrowserProcessManager.ActiveProcessCount == 0, "Both browser groups clean up completely");
+            AppSettings.Current = new AppSettings { BrowserProcessLimit = 5, BrowserConcurrency = 1 };
+
             root = BrowserProcessManager.StartHidden(Assembly.GetExecutingAssembly().Location, "--sleep");
             BrowserProcessManager.Shutdown();
             Check(BrowserProcessManager.ActiveProcessCount == 0 && BrowserProcessManager.ShutdownToken.IsCancellationRequested, "Shutdown kills active work and cancels queued renders");

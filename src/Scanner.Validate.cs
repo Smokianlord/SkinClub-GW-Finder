@@ -251,7 +251,7 @@ namespace SkinClubGiveawayDesktop
                     cs.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
                 }
                 KnownItems = IndexKnown(data);
-                SemaphoreSlim throttle = new SemaphoreSlim(16, 16);
+                SemaphoreSlim throttle = new SemaphoreSlim(AppSettings.Current.ProbeConcurrency, AppSettings.Current.ProbeConcurrency);
                 List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
                 ResetChecks(cs.Count);
                 foreach (Candidate c in cs) tasks.Add(ValidateAsync(c, throttle));

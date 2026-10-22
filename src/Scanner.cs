@@ -118,9 +118,10 @@ namespace SkinClubGiveawayDesktop
             RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
         private static readonly HttpClient Client = MakeClient();
-        // HTTP discovery stays concurrent. Render one page at a time, with Windows
-        // enforcing five browser processes total INCLUDING the root and all children.
-        private static readonly SemaphoreSlim RenderFallbackThrottle = new SemaphoreSlim(1, 1);
+        // HTTP discovery stays concurrent. Rendered pages run in parallel up to BrowserConcurrency,
+        // each in its own Windows job that caps that browser's processes and memory.
+        private static readonly SemaphoreSlim RenderFallbackThrottle =
+            new SemaphoreSlim(AppSettings.Current.BrowserConcurrency, AppSettings.Current.BrowserConcurrency);
         // Live progress for the Logs tab: page checks in flight, finished, and expected this scan.
         private static int activeChecks, checksDone, checksTotal;
         public static int ActiveChecks { get { return Volatile.Read(ref activeChecks); } }
@@ -212,7 +213,7 @@ namespace SkinClubGiveawayDesktop
         private static HttpClient MakeClient()
         {
             ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
-            ServicePointManager.DefaultConnectionLimit = 20;
+            ServicePointManager.DefaultConnectionLimit = 128;
             HttpClientHandler h = new HttpClientHandler();
             h.AllowAutoRedirect = true;
             h.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;

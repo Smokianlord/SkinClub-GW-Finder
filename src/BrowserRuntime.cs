@@ -40,12 +40,21 @@ namespace SkinClubGiveawayDesktop
 
     public static class BrowserProcessManager
     {
+        // Processes allowed per browser (root plus children), and how many browsers run at once.
         public static int MaxProcesses { get { return AppSettings.Current.BrowserProcessLimit; } }
+        public static int MaxConcurrent { get { return AppSettings.Current.BrowserConcurrency; } }
+        public static int TotalProcessCap { get { return MaxProcesses * MaxConcurrent; } }
+
+        private sealed class BrowserJob
+        {
+            public IntPtr Job;
+            public Process Root;
+            public Timer Watchdog;
+        }
+
         private static readonly object Gate = new object();
         private static readonly CancellationTokenSource ShutdownSource = new CancellationTokenSource();
-        private static IntPtr activeJob;
-        private static Process activeRoot;
-        private static Timer watchdog;
+        private static readonly List<BrowserJob> Jobs = new List<BrowserJob>();
         private static bool shuttingDown;
         public static CancellationToken ShutdownToken { get { return ShutdownSource.Token; } }
 
@@ -109,18 +118,24 @@ namespace SkinClubGiveawayDesktop
 
         private static int lastCount;
 
-        private static int CountLocked()
+        private static int CountJobLocked(BrowserJob job)
         {
-            if (activeJob == IntPtr.Zero) { lastCount = 0; return 0; }
             Accounting info;
-            if (!QueryInformationJobObject(activeJob, 1, out info, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero))
+            if (!QueryInformationJobObject(job.Job, 1, out info, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot verify browser process count");
-            lastCount = (int)info.ActiveProcesses;
-            return lastCount;
+            return (int)info.ActiveProcesses;
         }
 
-        // Called by the UI timer. Browser cleanup holds Gate while it waits for processes to exit
-        // (up to 5 seconds); the UI must not freeze behind that, so fall back to the last count read.
+        private static int CountLocked()
+        {
+            int total = 0;
+            foreach (BrowserJob job in Jobs) total += CountJobLocked(job);
+            lastCount = total;
+            return total;
+        }
+
+        // Called by the UI timer. Starting a browser holds Gate briefly; the UI must never freeze
+        // behind it, so fall back to the last count read.
         public static int ActiveProcessCount
         {
             get
@@ -142,23 +157,24 @@ namespace SkinClubGiveawayDesktop
             lock (Gate)
             {
                 if (shuttingDown) throw new OperationCanceledException("Application is closing");
-                if (activeJob != IntPtr.Zero) throw new InvalidOperationException("Previous browser cleanup has not completed");
-                IntPtr job = CreateJobObject(IntPtr.Zero, null);
-                if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (Jobs.Count >= MaxConcurrent) throw new InvalidOperationException("Previous browser cleanup has not completed");
+                IntPtr handle = CreateJobObject(IntPtr.Zero, null);
+                if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+                BrowserJob job = new BrowserJob { Job = handle };
                 ProcessInformation native = new ProcessInformation();
                 Process root = null;
                 bool started = false;
                 try
                 {
                     ExtendedLimits limits = new ExtendedLimits();
-                    // KILL_ON_JOB_CLOSE | ACTIVE_PROCESS; no breakaway flags.
-                    // 0x200 = JOB_MEMORY: Windows refuses further memory to the browser group past this size.
+                    // KILL_ON_JOB_CLOSE | ACTIVE_PROCESS | JOB_MEMORY; no breakaway flags.
+                    // The memory budget is shared between the browsers that may run at once.
                     limits.Basic.LimitFlags = 0x2000 | 0x8 | 0x200;
                     limits.Basic.ActiveProcessLimit = (uint)MaxProcesses;
-                    ulong memoryBytes = (ulong)AppSettings.Current.BrowserMemoryLimitMB * 1024UL * 1024UL;
+                    ulong memoryBytes = (ulong)Math.Max(256, AppSettings.Current.BrowserMemoryLimitMB / MaxConcurrent) * 1024UL * 1024UL;
                     if (UIntPtr.Size == 4) memoryBytes = Math.Min(memoryBytes, uint.MaxValue);
                     limits.JobMemory = (UIntPtr)memoryBytes;
-                    if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimits))))
+                    if (!SetInformationJobObject(handle, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimits))))
                         throw new Win32Exception(Marshal.GetLastWin32Error());
                     StartupInfo startup = new StartupInfo();
                     startup.Size = (uint)Marshal.SizeOf(typeof(StartupInfo));
@@ -167,25 +183,18 @@ namespace SkinClubGiveawayDesktop
                     if (!CreateProcess(executable, new StringBuilder("\"" + executable + "\" " + arguments),
                         IntPtr.Zero, IntPtr.Zero, false, 0x08000004, IntPtr.Zero, null, ref startup, out native))
                         throw new Win32Exception(Marshal.GetLastWin32Error());
-                    if (!AssignProcessToJobObject(job, native.Process))
+                    if (!AssignProcessToJobObject(handle, native.Process))
                         throw new Win32Exception(Marshal.GetLastWin32Error(), "Browser containment failed; launch cancelled");
                     root = Process.GetProcessById((int)native.Pid);
-                    activeJob = job;
-                    activeRoot = root;
+                    job.Root = root;
+                    Jobs.Add(job);
                     if (ResumeThread(native.Thread) == uint.MaxValue)
                         throw new Win32Exception(Marshal.GetLastWin32Error());
                     // An independent backstop also kills the job if async rendering gets stuck.
-                    watchdog = new Timer(delegate
-                    {
-                        lock (Gate)
-                        {
-                            if (activeJob != job) return;
-                            ActivityLog.Write("TIMEOUT", "Browser exceeded 45 seconds; terminating its entire process group");
-                            if (!TerminateJobObject(job, 1)) ActivityLog.Write("ERROR", "Watchdog cleanup failed: " + Marshal.GetLastWin32Error());
-                        }
-                    }, null, 45000, Timeout.Infinite);
+                    job.Watchdog = new Timer(delegate { WatchdogFired(job); }, null, 45000, Timeout.Infinite);
                     started = true;
-                    ActivityLog.Write("BROWSER", "Started PID " + native.Pid + "; hard process cap " + MaxProcesses + "; one page at a time");
+                    ActivityLog.Write("BROWSER", "Started PID " + native.Pid + "; up to " + MaxProcesses + " processes and " +
+                        Math.Max(256, AppSettings.Current.BrowserMemoryLimitMB / MaxConcurrent) + " MB each; " + Jobs.Count + " of " + MaxConcurrent + " browsers running");
                     return root;
                 }
                 finally
@@ -193,10 +202,9 @@ namespace SkinClubGiveawayDesktop
                     if (!started)
                     {
                         if (native.Process != IntPtr.Zero) TerminateProcess(native.Process, 1);
-                        TerminateJobObject(job, 1);
-                        CloseHandle(job);
-                        activeJob = IntPtr.Zero;
-                        activeRoot = null;
+                        TerminateJobObject(handle, 1);
+                        CloseHandle(handle);
+                        Jobs.Remove(job);
                         if (root != null) root.Dispose();
                     }
                     if (native.Thread != IntPtr.Zero) CloseHandle(native.Thread);
@@ -205,25 +213,64 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
+        private static void WatchdogFired(BrowserJob job)
+        {
+            lock (Gate)
+            {
+                if (!Jobs.Contains(job)) return;
+                ActivityLog.Write("TIMEOUT", "Browser exceeded 45 seconds; terminating its entire process group");
+                if (!TerminateJobObject(job.Job, 1)) ActivityLog.Write("ERROR", "Watchdog cleanup failed: " + Marshal.GetLastWin32Error());
+            }
+        }
+
+        // Test hook: shorten the watchdog of one running browser.
+        internal static void SetWatchdogDueTime(Process root, int milliseconds)
+        {
+            lock (Gate)
+            {
+                foreach (BrowserJob job in Jobs)
+                    if (object.ReferenceEquals(job.Root, root) && job.Watchdog != null) job.Watchdog.Change(milliseconds, Timeout.Infinite);
+            }
+        }
+
         public static void KillProcessTree(Process process)
         {
             if (process == null) return;
+            BrowserJob job = null;
             lock (Gate)
             {
-                if (!object.ReferenceEquals(process, activeRoot)) return;
-                int pid = process.Id;
-                if (watchdog != null) { watchdog.Dispose(); watchdog = null; }
-                if (!TerminateJobObject(activeJob, 0))
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not terminate browser group; new launches blocked");
-                Stopwatch wait = Stopwatch.StartNew();
-                while (CountLocked() != 0 && wait.ElapsedMilliseconds < 5000) Thread.Sleep(25);
-                if (CountLocked() != 0)
-                    throw new InvalidOperationException("Browser children are still exiting; new launches blocked");
-                CloseHandle(activeJob);
-                activeJob = IntPtr.Zero;
-                activeRoot = null;
+                foreach (BrowserJob candidate in Jobs)
+                    if (object.ReferenceEquals(candidate.Root, process)) { job = candidate; break; }
+                if (job == null) return;
+                if (job.Watchdog != null) { job.Watchdog.Dispose(); job.Watchdog = null; }
+                if (!TerminateJobObject(job.Job, 0))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not terminate browser group; its launch slot stays blocked");
+            }
+
+            // Wait for the group to empty without holding Gate, so other browsers keep running and
+            // the UI is never blocked. The job stays registered, which keeps its slot occupied.
+            int pid = process.Id;
+            Stopwatch wait = Stopwatch.StartNew();
+            int remaining;
+            do
+            {
+                lock (Gate)
+                {
+                    if (!Jobs.Contains(job)) return; // Shutdown already closed everything
+                    remaining = CountJobLocked(job);
+                }
+                if (remaining != 0) Thread.Sleep(25);
+            } while (remaining != 0 && wait.ElapsedMilliseconds < 5000);
+            if (remaining != 0)
+                throw new InvalidOperationException("Browser children are still exiting; its launch slot stays blocked");
+
+            lock (Gate)
+            {
+                if (!Jobs.Contains(job)) return;
+                CloseHandle(job.Job);
+                Jobs.Remove(job);
                 process.Dispose();
-                ActivityLog.Write("CLEANUP", "PID " + pid + " and all children closed; browser processes 0/" + MaxProcesses);
+                ActivityLog.Write("CLEANUP", "PID " + pid + " and all children closed; browsers running " + Jobs.Count + "/" + MaxConcurrent);
             }
         }
 
@@ -234,14 +281,14 @@ namespace SkinClubGiveawayDesktop
             {
                 if (shuttingDown) return;
                 shuttingDown = true;
-                if (watchdog != null) { watchdog.Dispose(); watchdog = null; }
-                if (activeJob != IntPtr.Zero)
+                foreach (BrowserJob job in Jobs)
                 {
-                    TerminateJobObject(activeJob, 0);
-                    CloseHandle(activeJob);
-                    activeJob = IntPtr.Zero;
+                    if (job.Watchdog != null) { job.Watchdog.Dispose(); job.Watchdog = null; }
+                    TerminateJobObject(job.Job, 0);
+                    CloseHandle(job.Job);
+                    if (job.Root != null) job.Root.Dispose();
                 }
-                if (activeRoot != null) { activeRoot.Dispose(); activeRoot = null; }
+                Jobs.Clear();
             }
         }
     }

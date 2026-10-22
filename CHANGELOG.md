@@ -10,6 +10,7 @@
 - Fixed: History showed an unrelated code (for example `LP-XTVFAGX7QP9W`) instead of the giveaway's entry code, because ended pages only show that other code. A code is now accepted only if it ends with the URL's DDMMYY slug, ended pages never overwrite saved codes or deposits, and existing damaged entries are repaired on load (a one-time copy is kept as `data.json.before-code-repair`).
 - History now shows each creator's latest giveaway (newest dated link) and sorts a creator's rows newest first; older entries stay saved. A creator's latest ended giveaway is never pruned by the History limit. Turn this off in Settings.
 - Logs tab: shows live page-check progress (running / done of total) next to browser processes, refreshes twice a second, and no longer freezes the window while browser cleanup is waiting.
+- Limits raised: up to 6 pages render in parallel (each browser in its own Windows job with a process limit and a share of a 4 GB memory budget), 64 concurrent page checks, 128 connections. All configurable in `settings.json`. Deep Search from scratch dropped from about 330 s to about 15 s with identical results.
 - `Program.cs` split into `src/` files; `scripts/build.ps1` is the single build entry point; CI now runs the UI and browser-lifecycle tests.
 
 ## [1.4.0] - 2026-10-04

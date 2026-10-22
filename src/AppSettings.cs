@@ -23,6 +23,7 @@ namespace SkinClubGiveawayDesktop
         public int ProbeConcurrency { get; set; }
         // Windows-enforced ceilings for the one browser the app runs at a time (root plus children).
         public int BrowserProcessLimit { get; set; }
+        public int BrowserConcurrency { get; set; }
         public int BrowserMemoryLimitMB { get; set; }
         // Creator name -> domain, added to the built-in list (for example "Someone": "someone.club").
         public Dictionary<string, string> ExtraCreators { get; set; }
@@ -37,8 +38,9 @@ namespace SkinClubGiveawayDesktop
             HttpTimeoutSeconds = 8;
             RenderTimeoutSeconds = 30;
             MetadataRetryHours = 12;
-            ProbeConcurrency = 24;
-            BrowserProcessLimit = 32;
+            ProbeConcurrency = 64;
+            BrowserProcessLimit = 128;
+            BrowserConcurrency = 6;
             BrowserMemoryLimitMB = 4096;
             ExtraCreators = new Dictionary<string, string>();
         }
@@ -61,8 +63,9 @@ namespace SkinClubGiveawayDesktop
             HttpTimeoutSeconds = Clamp(HttpTimeoutSeconds, 3, 60);
             RenderTimeoutSeconds = Clamp(RenderTimeoutSeconds, 10, 120);
             MetadataRetryHours = Clamp(MetadataRetryHours, 1, 168);
-            ProbeConcurrency = Clamp(ProbeConcurrency, 4, 64);
-            BrowserProcessLimit = Clamp(BrowserProcessLimit, 5, 128);
+            ProbeConcurrency = Clamp(ProbeConcurrency, 4, 128);
+            BrowserProcessLimit = Clamp(BrowserProcessLimit, 5, 256);
+            BrowserConcurrency = Clamp(BrowserConcurrency, 1, 16);
             BrowserMemoryLimitMB = Clamp(BrowserMemoryLimitMB, 512, 16384);
             if (BrowserPath == null) BrowserPath = "";
             Dictionary<string, string> clean = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
