@@ -37,7 +37,8 @@ namespace SkinClubGiveawayDesktop
             {"THE ASH", "theash.club"}, {"TheDooo", "thedooo.club"}, {"Yumi", "tooyumi.club"},
             {"Yinger", "yinger.club"}, {"Dona", "thedona.club"}, {"WaffleXD", "wafflecs.club"},
             {"Kryoz", "kryoz.club"}, {"Python", "thepython.club"}, {"JOISPOI24", "joispoi.club"},
-            {"Joaco", "joaco.club"}
+            {"Joaco", "joaco.club"}, {"iNoToRiOuS", "inotorious.club"}, {"TCK10", "tck10.club"},
+            {"Karrigan", "karrigan.club"}, {"Theasylum", "theasylum.club"}
         };
 
         private static readonly Dictionary<string, string> CreatorDomains = MergeCreators();
