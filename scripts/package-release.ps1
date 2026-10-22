@@ -21,10 +21,9 @@ try {
         New-Item -ItemType Directory -Force (Split-Path $destination -Parent) | Out-Null
         Copy-Item -LiteralPath (Join-Path $repo $relative) -Destination $destination -Force
     }
-    $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-    if (!(Test-Path $compiler)) { $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework/v4.0.30319/csc.exe' }
     $exe = Join-Path $portable 'SkinClubGWFinder.exe'
-    & $compiler /nologo /codepage:65001 /target:winexe /optimize+ "/out:$exe" "/win32icon:$source/SkinClubGWFinder.ico" /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Program.cs') (Join-Path $source 'BrowserRuntime.cs')
+    # Build from the staged copy so the release is exactly what the source ZIP contains.
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $source 'scripts/build.ps1') -Output $exe
     if ($LASTEXITCODE -ne 0) { throw 'Release compilation failed' }
     $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
     if ($metadata.FileVersion -ne "$version.0" -or $metadata.ProductVersion -ne $version) { throw 'Executable version mismatch' }
@@ -51,8 +50,8 @@ try {
 
 Nothing has been published, pushed, or tagged by the packaging script.
 
-1. Commit and push the release changes to your repository first. Include Program.cs,
-   BrowserRuntime.cs, VERSION.txt, README.md, CHANGELOG.md,
+1. Commit and push the release changes to your repository first. Include the src/ folder,
+   scripts/build.ps1, VERSION.txt, README.md, CHANGELOG.md,
    releases/v1.4.0.md, scripts/package-release.ps1, .gitignore, and any other pending
    source/build/test changes. Do not commit dist/.
    If you use the source ZIP to update the repository, extract its CONTENTS into the
@@ -78,7 +77,7 @@ This is why committing and pushing the matching source before creating the tag m
     $archive = [IO.Compression.ZipFile]::OpenRead((Join-Path $output $assets[2]))
     try {
         $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-        foreach ($required in @('Program.cs', 'BrowserRuntime.cs', 'BUILD_EXE.bat', '.github/workflows/build.yml', 'tests/run.ps1', 'scripts/package-release.ps1', 'releases/v1.4.0.md')) {
+        foreach ($required in @('src/Program.cs', 'src/BrowserRuntime.cs', 'scripts/build.ps1', 'BUILD_EXE.bat', '.github/workflows/build.yml', 'tests/run.ps1', 'scripts/package-release.ps1', 'releases/v1.4.0.md')) {
             if ($entries -notcontains $required) { throw "Missing source archive entry: $required" }
         }
         if (@($entries | Where-Object { $_ -match '(^|/)data\.json|\.exe$|(^|/)\.git/' }).Count -gt 0) { throw 'Unexpected private or binary source entry' }

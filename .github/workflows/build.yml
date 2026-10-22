@@ -16,33 +16,15 @@ jobs:
 
       - name: Compile
         shell: pwsh
-        run: |
-          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          if (-not (Test-Path $csc)) {
-            $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
-          }
-          if (-not (Test-Path $csc)) {
-            throw "The .NET Framework C# compiler was not found."
-          }
+        run: ./scripts/build.ps1 -Output "$PWD/SkinClubGWFinder.exe"
 
-          & $csc `
-            /nologo `
-            /codepage:65001 `
-            /target:winexe `
-            /optimize+ `
-            /win32icon:"SkinClubGWFinder.ico" `
-            /out:"SkinClubGWFinder.exe" `
-            /reference:System.dll `
-            /reference:System.Core.dll `
-            /reference:System.Drawing.dll `
-            /reference:System.Windows.Forms.dll `
-            /reference:System.Net.Http.dll `
-            /reference:System.Web.Extensions.dll `
-            Program.cs BrowserRuntime.cs
+      - name: UI and persistence tests
+        shell: pwsh
+        run: ./tests/run.ps1
 
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
+      - name: Browser lifecycle tests
+        shell: pwsh
+        run: ./tests/run-browser.ps1
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4

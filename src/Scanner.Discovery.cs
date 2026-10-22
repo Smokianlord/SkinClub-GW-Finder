@@ -1,0 +1,390 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
+using System.Net.WebSockets;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+namespace SkinClubGiveawayDesktop
+{
+    public static partial class Scanner
+    {
+        private static string BuildProbeUrl(string host, string slug)
+        {
+            return "https://" + host + "/" + slug + "/";
+        }
+
+        private static IEnumerable<string> RecentDateSlugs(int daysBack)
+        {
+            DateTime today = DateTime.Now.Date;
+            for (int offset = 0; offset <= daysBack; offset++)
+            {
+                DateTime d = today.AddDays(-offset);
+                yield return string.Format("{0:00}{1:00}{2:00}", d.Day, d.Month, d.Year % 100);
+            }
+        }
+
+        private static List<string> FastProbeSlugs()
+        {
+            // Brute-forcing every creator x every day for two months produced
+            // thousands of HTTP requests and could make Deep Search take several
+            // minutes. Social/YouTube discovery is the primary discovery path;
+            // these probes are only a safety net. Keep the recent week plus the
+            // 1st/2nd of the current and previous two months (the common campaign
+            // slugs, including older examples such as 010826 and 020826).
+            HashSet<string> slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string slug in RecentDateSlugs(8)) slugs.Add(slug);
+
+            DateTime today = DateTime.Now.Date;
+            for (int monthOffset = 0; monthOffset <= 2; monthOffset++)
+            {
+                DateTime month = new DateTime(today.AddMonths(-monthOffset).Year, today.AddMonths(-monthOffset).Month, 1);
+                for (int day = 1; day <= 2; day++)
+                {
+                    DateTime d = new DateTime(month.Year, month.Month, day);
+                    slugs.Add(string.Format("{0:00}{1:00}{2:00}", d.Day, d.Month, d.Year % 100));
+                }
+            }
+            return slugs.ToList();
+        }
+
+        private static List<Candidate> GeneratedCandidates()
+        {
+            List<Candidate> list = new List<Candidate>();
+            List<string> slugs = FastProbeSlugs();
+            foreach (KeyValuePair<string, string> kv in CreatorDomains)
+            {
+                foreach (string slug in slugs)
+                    list.Add(new Candidate(kv.Key, BuildProbeUrl(kv.Value, slug), "domain-probe"));
+            }
+            return list;
+        }
+
+        private static void AddDiscoveredDomainProbes(List<Candidate> candidates)
+        {
+            HashSet<string> hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Candidate c in candidates.ToArray())
+            {
+                try
+                {
+                    Uri u = new Uri(c.Url);
+                    string host = u.Host.ToLowerInvariant();
+                    if (host.StartsWith("www.")) host = host.Substring(4);
+                    if (host.EndsWith(".club", StringComparison.OrdinalIgnoreCase)) hosts.Add(host);
+                }
+                catch { }
+            }
+
+            foreach (string host in hosts)
+            {
+                string creator = InferCreator("https://" + host + "/", null);
+                foreach (string slug in FastProbeSlugs())
+                    candidates.Add(new Candidate(creator, BuildProbeUrl(host, slug), "discovered-domain-probe"));
+            }
+        }
+
+        private static async Task<string> GetStringSafeAsync(string url)
+        {
+            ActivityLog.Write("SOURCE", "Fetching " + url);
+            try
+            {
+                using (HttpResponseMessage r = await Client.GetAsync(url))
+                {
+                    if (!r.IsSuccessStatusCode)
+                    { ActivityLog.Write("ERROR", "HTTP " + (int)r.StatusCode + " fetching " + url); return ""; }
+                    string content = await r.Content.ReadAsStringAsync();
+                    ActivityLog.Write("SOURCE", "Received " + content.Length + " characters from " + url);
+                    return content;
+                }
+            }
+            catch (Exception ex) { ActivityLog.Write("ERROR", "Source failed: " + url + " — " + ex.Message); return ""; }
+        }
+
+        private static async Task<List<Candidate>> DiscoverTelegramAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            string[] channels = new string[] { "skinclubcreatorsgiveaway", "skinclubcs2" };
+            foreach (string channel in channels)
+            {
+                string raw = await GetStringSafeAsync("https://t.me/s/" + channel);
+                found.AddRange(ExtractDirectUrls(raw, "telegram:" + channel));
+            }
+            return found;
+        }
+
+        private static async Task<List<Candidate>> DiscoverYoutubeAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            HashSet<string> videoIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Broad searches catch newly emerging creators. Partner-specific
+            // searches stop a creator such as DrewCS2 from being missed simply
+            // because their video does not rank for the generic query.
+            string[] genericQueries = new string[]
+            {
+                "skinclub giveaway", "skinclub cs2 giveaway", "skinclub partner giveaway", "skinclub .club giveaway"
+            };
+
+            foreach (string q in genericQueries)
+            {
+                string raw = await GetStringSafeAsync("https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q));
+                found.AddRange(ExtractDirectUrls(raw, "youtube-search"));
+                int added = 0;
+                foreach (Match m in VideoIdRegex.Matches(raw))
+                {
+                    if (videoIds.Count >= 120 || added >= 12) break;
+                    if (videoIds.Add(m.Groups[1].Value)) added++;
+                }
+            }
+
+            object youtubeGate = new object();
+            SemaphoreSlim partnerSem = new SemaphoreSlim(4, 4);
+            List<Task> partnerTasks = new List<Task>();
+            foreach (string partnerName in PartnerSearchNames())
+            {
+                string partner = partnerName;
+                partnerTasks.Add(Task.Run(async delegate
+                {
+                    await partnerSem.WaitAsync();
+                    try
+                    {
+                        string q = partner + " skinclub";
+                        string raw = await GetStringSafeAsync("https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(q));
+                        List<Candidate> local = ExtractDirectUrls(raw, "youtube-partner:" + partner);
+                        List<string> localIds = new List<string>();
+                        foreach (Match m in VideoIdRegex.Matches(raw))
+                        {
+                            if (localIds.Count >= 2) break;
+                            localIds.Add(m.Groups[1].Value);
+                        }
+                        lock (youtubeGate)
+                        {
+                            found.AddRange(local);
+                            foreach (string id in localIds)
+                            {
+                                if (videoIds.Count >= 120) break;
+                                videoIds.Add(id);
+                            }
+                        }
+                    }
+                    finally { partnerSem.Release(); }
+                }));
+            }
+            if (partnerTasks.Count > 0) await Task.WhenAll(partnerTasks);
+
+            SemaphoreSlim sem = new SemaphoreSlim(6, 6);
+            List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
+            foreach (string id in videoIds.Take(120))
+            {
+                tasks.Add(Task.Run(async delegate
+                {
+                    await sem.WaitAsync();
+                    try
+                    {
+                        string raw = await GetStringSafeAsync("https://www.youtube.com/watch?v=" + id);
+                        return ExtractDirectUrls(raw, "youtube-description");
+                    }
+                    finally { sem.Release(); }
+                }));
+            }
+            if (tasks.Count > 0)
+            {
+                List<Candidate>[] batches = await Task.WhenAll(tasks);
+                foreach (List<Candidate> batch in batches) found.AddRange(batch);
+            }
+            return found;
+        }
+
+        private static async Task<List<Candidate>> DiscoverPartnerSocialsAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            HashSet<string> telegramPages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            object gate = new object();
+            SemaphoreSlim searchSem = new SemaphoreSlim(4, 4);
+            List<Task> searchTasks = new List<Task>();
+
+            foreach (string partnerName in PartnerSearchNames())
+            {
+                string partner = partnerName;
+                searchTasks.Add(Task.Run(async delegate
+                {
+                    await searchSem.WaitAsync();
+                    try
+                    {
+                        string q = "\"" + partner + "\" SkinClub giveaway (YouTube OR X OR Twitter OR Telegram OR Discord OR Instagram OR TikTok OR Twitch OR Kick OR Facebook)";
+                        string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=20";
+                        string raw = await GetStringSafeAsync(bing);
+                        List<Candidate> local = ExtractDirectUrls(raw, "partner-social-search:" + partner);
+                        List<string> socials = ExtractSocialUrls(raw);
+                        lock (gate)
+                        {
+                            found.AddRange(local);
+                            foreach (string socialUrl in socials)
+                            {
+                                if (telegramPages.Count >= 60) break;
+                                Uri u;
+                                if (!Uri.TryCreate(socialUrl, UriKind.Absolute, out u)) continue;
+                                if (!u.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase)) continue;
+                                if (u.AbsolutePath.StartsWith("/+", StringComparison.Ordinal)) continue;
+                                telegramPages.Add(socialUrl);
+                            }
+                        }
+                    }
+                    finally { searchSem.Release(); }
+                }));
+            }
+            if (searchTasks.Count > 0) await Task.WhenAll(searchTasks);
+
+            SemaphoreSlim sem = new SemaphoreSlim(4, 4);
+            List<Task<List<Candidate>>> tasks = new List<Task<List<Candidate>>>();
+            foreach (string page in telegramPages.Take(60))
+            {
+                tasks.Add(Task.Run(async delegate
+                {
+                    await sem.WaitAsync();
+                    try
+                    {
+                        string raw = await GetStringSafeAsync(page);
+                        return ExtractDirectUrls(raw, "partner-telegram");
+                    }
+                    finally { sem.Release(); }
+                }));
+            }
+            if (tasks.Count > 0)
+            {
+                List<Candidate>[] batches = await Task.WhenAll(tasks);
+                foreach (List<Candidate> batch in batches) found.AddRange(batch);
+            }
+
+            return found;
+        }
+
+        private static async Task<List<Candidate>> DiscoverWebAsync()
+        {
+            List<Candidate> found = new List<Candidate>();
+            List<string> queries = new List<string>();
+            queries.Add("SkinClub giveaway .club Tickets left");
+            queries.Add("SkinClub Time to completion .club");
+            queries.Add("SkinClub partner giveaway .club");
+            queries.Add("site:x.com/skinclubmedia SkinClub giveaway .club");
+            queries.Add("site:x.com/skinclubpartner SkinClub giveaway .club");
+            queries.Add("site:t.me/skinclubcs2 giveaway .club");
+
+            foreach (string slug in FastProbeSlugs())
+                queries.Add("\"" + slug + "\" SkinClub giveaway .club");
+
+            object gate = new object();
+            SemaphoreSlim sem = new SemaphoreSlim(4, 4);
+            List<Task> tasks = new List<Task>();
+            foreach (string query in queries)
+            {
+                string q = query;
+                tasks.Add(Task.Run(async delegate
+                {
+                    await sem.WaitAsync();
+                    try
+                    {
+                        string bing = "https://www.bing.com/search?q=" + Uri.EscapeDataString(q) + "&count=50";
+                        string raw = await GetStringSafeAsync(bing);
+                        List<Candidate> local = ExtractDirectUrls(raw, "web-search");
+                        lock (gate) found.AddRange(local);
+                    }
+                    finally { sem.Release(); }
+                }));
+            }
+            if (tasks.Count > 0) await Task.WhenAll(tasks);
+            return found;
+        }
+
+        public static async Task<AppData> DeepScanAsync(AppData data)
+        {
+            await ScanLock.WaitAsync();
+            try
+            {
+                ActivityLog.Write("SCAN", "Deep Search started: Telegram, YouTube, partner socials and web search");
+                Task<List<Candidate>> telegram = DiscoverTelegramAsync();
+                Task<List<Candidate>> youtube = DiscoverYoutubeAsync();
+                Task<List<Candidate>> partnerSocials = DiscoverPartnerSocialsAsync();
+                Task<List<Candidate>> web = DiscoverWebAsync();
+
+                List<Candidate> candidates = GeneratedCandidates();
+                candidates.AddRange(await telegram);
+                candidates.AddRange(await youtube);
+                candidates.AddRange(await partnerSocials);
+                candidates.AddRange(await web);
+                foreach (GiveawayItem i in data.Items)
+                    candidates.Add(new Candidate(i.Creator, i.Url, string.IsNullOrWhiteSpace(i.Source) ? "saved" : i.Source));
+
+                // Any .club domain discovered from search, Telegram, YouTube, or an
+                // existing saved item becomes probeable automatically. This prevents
+                // Deep Search from depending only on the hard-coded creator list.
+                AddDiscoveredDomainProbes(candidates);
+
+                Dictionary<string, Candidate> dedup = new Dictionary<string, Candidate>(StringComparer.OrdinalIgnoreCase);
+                foreach (Candidate c in candidates)
+                {
+                    if (string.IsNullOrWhiteSpace(c.Url)) continue;
+                    string key = GiveawayKey(c.Url);
+                    if (key.Length == 0) continue;
+                    if (!dedup.ContainsKey(key))
+                    {
+                        dedup[key] = new Candidate(c.Creator, CleanDiscoveredUrl(c.Url), c.Source);
+                    }
+                }
+                candidates = dedup.Values.ToList();
+                ActivityLog.Write("SCAN", "Discovery complete; validating " + candidates.Count + " unique candidate pages");
+                HashSet<string> known = new HashSet<string>(data.Items.Select(delegate(GiveawayItem x) { return GiveawayKey(x.Url); }), StringComparer.OrdinalIgnoreCase);
+                KnownItems = IndexKnown(data);
+
+                List<GiveawayItem> useful = new List<GiveawayItem>();
+                SemaphoreSlim throttle = new SemaphoreSlim(12, 12);
+                const int chunkSize = 180;
+                for (int start = 0; start < candidates.Count; start += chunkSize)
+                {
+                    List<Candidate> batch = candidates.Skip(start).Take(chunkSize).ToList();
+                    List<Task<GiveawayItem>> tasks = new List<Task<GiveawayItem>>();
+                    foreach (Candidate c in batch) tasks.Add(ValidateAsync(c, throttle));
+                    GiveawayItem[] updates = await Task.WhenAll(tasks);
+                    foreach (GiveawayItem u in updates)
+                    {
+                        string key = GiveawayKey(u.Url);
+                        if (u.Status == "active" || u.Status == "ended" || known.Contains(key)) useful.Add(u);
+                    }
+                }
+                MergeItems(data, useful);
+                data.LastScan = DateTime.UtcNow.ToString("o");
+                data.LastDeepScan = data.LastScan;
+                DataStore.Save(data);
+                ActivityLog.Write("SCAN", "Deep Search complete; " + useful.Count + " useful results saved");
+                return data;
+            }
+            finally { KnownItems = null; ScanLock.Release(); }
+        }
+
+        public static async Task<GiveawayItem> ValidateOneAsync(string creator, string url)
+        {
+            if (!DirectUrlRegex.IsMatch(url)) throw new ArgumentException("Use a direct dated creator giveaway URL, for example https://creator.club/010926/");
+            SemaphoreSlim throttle = new SemaphoreSlim(1, 1);
+            return await ValidateAsync(new Candidate(creator, url, "manual"), throttle);
+        }
+
+        public static void MergeOne(AppData data, GiveawayItem item)
+        {
+            MergeItems(data, new GiveawayItem[] { item });
+            DataStore.Save(data);
+        }
+    }
+}
