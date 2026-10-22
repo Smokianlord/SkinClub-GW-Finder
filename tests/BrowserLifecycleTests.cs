@@ -22,6 +22,8 @@ static class BrowserLifecycleTests
     static void Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "--sleep") { Thread.Sleep(60000); return; }
+        // These checks prove Windows enforces the configured limit, so pin it instead of using the default.
+        AppSettings.Current = new AppSettings { BrowserProcessLimit = 5 };
         if (args.Length > 0 && args[0] == "--tree")
         {
             for (int i = 0; i < 12; i++)

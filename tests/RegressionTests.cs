@@ -180,7 +180,7 @@ static class RegressionTests
             Task.Run(delegate { ActivityLog.Write("TEST", "Worker-thread activity is visible"); }).Wait();
             Call(form, "UpdateLogs");
             Check(((TextBox)Field(form, "logText")).Text.Contains("Worker-thread activity is visible"), "Logs tab displays background worker activity");
-            Check(!grid.Visible && ((Label)Field(form, "viewSubtitle")).Text.Contains("0/5"), "Logs tab shows browser process count");
+            Check(!grid.Visible && ((Label)Field(form, "viewSubtitle")).Text.Contains("0/" + BrowserProcessManager.MaxProcesses), "Logs tab shows browser process count");
             using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
             { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(Path.Combine(folder, "logs-window.png")); }
             ((Button)Field(form, "activeButton")).PerformClick();

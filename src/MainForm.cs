@@ -117,7 +117,7 @@ namespace SkinClubGiveawayDesktop
             // unknown on startup; that made the History tab rebuild itself on
             // every launch instead of loading the saved classification.
             BuildUi();
-            ActivityLog.Write("APP", "Ready. Browser process limit: 5 total; one rendered page at a time; 30-second page timeout.");
+            ActivityLog.Write("APP", "Ready. Browser limits: " + BrowserProcessManager.MaxProcesses + " processes, " + AppSettings.Current.BrowserMemoryLimitMB + " MB; one rendered page at a time; " + AppSettings.Current.RenderTimeoutSeconds + "-second page timeout.");
             logTimer.Interval = 500;
             logTimer.Tick += delegate { UpdateLogs(); };
             logTimer.Start();
@@ -1469,7 +1469,7 @@ namespace SkinClubGiveawayDesktop
                 string checks = total > 0 && (scanning || Scanner.ActiveChecks > 0)
                     ? "Page checks " + Scanner.ChecksDone + "/" + total + " (" + Scanner.ActiveChecks + " running)"
                     : "Page checks idle";
-                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/5  \u00b7  Queued pages " + Scanner.QueuedRenders +
+                viewSubtitle.Text = "Browser processes " + BrowserProcessManager.ActiveProcessCount + "/" + BrowserProcessManager.MaxProcesses + "  \u00b7  Queued pages " + Scanner.QueuedRenders +
                     "  \u00b7  " + checks + "  \u00b7  Latest 2,000 events";
             }
             catch { viewSubtitle.Text = "Browser count unavailable — check cleanup errors below"; }

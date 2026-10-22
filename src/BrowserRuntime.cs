@@ -40,7 +40,7 @@ namespace SkinClubGiveawayDesktop
 
     public static class BrowserProcessManager
     {
-        public const int MaxProcesses = 5;
+        public static int MaxProcesses { get { return AppSettings.Current.BrowserProcessLimit; } }
         private static readonly object Gate = new object();
         private static readonly CancellationTokenSource ShutdownSource = new CancellationTokenSource();
         private static IntPtr activeJob;
@@ -152,8 +152,12 @@ namespace SkinClubGiveawayDesktop
                 {
                     ExtendedLimits limits = new ExtendedLimits();
                     // KILL_ON_JOB_CLOSE | ACTIVE_PROCESS; no breakaway flags.
-                    limits.Basic.LimitFlags = 0x2000 | 0x8;
-                    limits.Basic.ActiveProcessLimit = MaxProcesses;
+                    // 0x200 = JOB_MEMORY: Windows refuses further memory to the browser group past this size.
+                    limits.Basic.LimitFlags = 0x2000 | 0x8 | 0x200;
+                    limits.Basic.ActiveProcessLimit = (uint)MaxProcesses;
+                    ulong memoryBytes = (ulong)AppSettings.Current.BrowserMemoryLimitMB * 1024UL * 1024UL;
+                    if (UIntPtr.Size == 4) memoryBytes = Math.Min(memoryBytes, uint.MaxValue);
+                    limits.JobMemory = (UIntPtr)memoryBytes;
                     if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimits))))
                         throw new Win32Exception(Marshal.GetLastWin32Error());
                     StartupInfo startup = new StartupInfo();

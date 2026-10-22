@@ -7,6 +7,9 @@
 - New Settings dialog and `settings.json` (refresh interval, History size, notifications, browser, timeouts, `ExtraCreators`).
 - Optional tray notifications for new giveaways and giveaways ending today.
 - Faster, lighter Deep Search: headers-first requests, capped page sizes, page checks overlap with discovery, higher probe concurrency, scan data copied without a JSON round-trip, memory trimmed after scans.
+- Fixed: History showed an unrelated code (for example `LP-XTVFAGX7QP9W`) instead of the giveaway's entry code, because ended pages only show that other code. A code is now accepted only if it ends with the URL's DDMMYY slug, ended pages never overwrite saved codes or deposits, and existing damaged entries are repaired on load (a one-time copy is kept as `data.json.before-code-repair`).
+- History now shows each creator's latest giveaway (newest dated link) and sorts a creator's rows newest first; older entries stay saved. A creator's latest ended giveaway is never pruned by the History limit. Turn this off in Settings.
+- Logs tab: shows live page-check progress (running / done of total) next to browser processes, refreshes twice a second, and no longer freezes the window while browser cleanup is waiting.
 - `Program.cs` split into `src/` files; `scripts/build.ps1` is the single build entry point; CI now runs the UI and browser-lifecycle tests.
 
 ## [1.4.0] - 2026-10-04

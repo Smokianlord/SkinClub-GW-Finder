@@ -22,7 +22,7 @@ It focuses on actual dated giveaway landing pages rather than creator homepages 
 - **Copy and open actions** for direct giveaway links.
 - **Automatic refresh** every 10 minutes, plus manual Refresh.
 - **Persistent local data** between launches.
-- **Bounded browser usage:** one rendered page at a time, capped at five app-owned browser processes total. The complete process group is terminated and checked after each page, even if the original browser process already exited. Rendering has a 30-second timeout and an independent 45-second cleanup watchdog.
+- **Bounded browser usage:** one rendered page at a time, capped by Windows at 32 app-owned browser processes and 4 GB of memory for that browser (`BrowserProcessLimit` and `BrowserMemoryLimitMB` in `settings.json`). The complete process group is terminated and checked after each page, even if the original browser process already exited. Rendering has a 30-second timeout and an independent 45-second cleanup watchdog.
 - **Logs tab:** live page checks, render queue, browser launches, results, failures, and confirmed cleanup. Shows the current browser process count and queued pages, with Copy/Clear actions and a bounded 2,000-event session history.
 
 - **Settings dialog and `settings.json`:** refresh interval, History size, notifications and browser choice, plus advanced options (timeouts, `ExtraCreators` to track a new creator domain without recompiling).
