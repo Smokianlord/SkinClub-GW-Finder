@@ -81,7 +81,7 @@ namespace SkinClubGiveawayDesktop
 |]{0,80})[ \t]*$",
             RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
         private static readonly Regex ExactEndedValueRegex = new Regex(
-            @"^\s*(?:end|ended|fin|finished|k[eế]t\s*th[uú]c|ket\s*thuc|cerrado|terminado|finalizado|encerrado|conclu[ií]do)\s*[.!]*\s*$",
+            @"^\s*(?:end|ended|fin|fim|finished|k[eế]t\s*th[uú]c|ket\s*thuc|cerrado|cerrada|terminado|terminada|finalizado|finalizada|encerrado|encerrada|acabou|conclu[ií]do|conclu[ií]da|termin[eé]e?|beendet|ende|bitti|zako[nń]czon[ey]|завершен[оа]?|завершён|окончен[оа]?|конец)\s*[.!]*\s*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex CountdownUnitRegex = new Regex(
             @"(\d+(?:[.,]\d+)?)\s*(days?|d[ií]as?|dias?|d|hours?|hrs?|horas?|h|minutes?|mins?|minutos?|m|seconds?|secs?|segundos?|s)\b",

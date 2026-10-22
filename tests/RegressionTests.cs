@@ -181,6 +181,15 @@ static class RegressionTests
         GiveawayItem endedPage = Scanner.ValidateAsync(new Candidate("Kryoz", "https://kryoz.club/010826/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
         Check(endedPage.Status == "ended" && endedPage.PromoCode == "-", "An ended page's unrelated code is not taken as the entry code");
 
+        // "Time remaining: END" in other languages must still mean the giveaway is over, even with tickets left.
+        foreach (string word in new string[] { "FIM", "FIN", "ENDED", "Encerrado", "Terminé", "Завершено" })
+        {
+            ParseResult over = Scanner.ParsePage("<html><body><div>Bilhetes restantes: 436 / 625</div><div>Tempo restante: " + word + "</div></body></html>");
+            Check(over.Status == "ended" && over.Deadline == "Ended", "A page showing '" + word + "' as the time remaining is classified as ended");
+        }
+        ParseResult live = Scanner.ParsePage("<html><body><div>Bilhetes restantes: 436 / 625</div><div>Tempo restante: 12h 30m 5s</div></body></html>");
+        Check(live.Status == "active", "A running countdown still means active");
+
         // A check that fails to read a page must be retried, and never mistaken for "no giveaway here".
         string endedHtml = "<html><body>Tickets left: 0 / 500</body></html>";
         FieldInfo clientField = typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static);
