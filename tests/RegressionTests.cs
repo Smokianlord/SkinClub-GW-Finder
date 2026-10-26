@@ -297,6 +297,31 @@ static class RegressionTests
         long logVersion = -1;
         string boundedLog = ActivityLog.Snapshot(ref logVersion);
         Check(boundedLog.Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries).Length == 2000, "Session log cannot grow beyond 2000 entries");
+        // History opens with the most recently ended giveaway on top, and each tab keeps its own sort.
+        AppData endedOrder = new AppData();
+        DateTime endedBase = DateTime.UtcNow;
+        endedOrder.Items.Add(new GiveawayItem { Creator = "Zed", Url = "https://zed.club/010826/", Status = "ended", HistorySince = endedBase.AddDays(-1).ToString("o") });
+        endedOrder.Items.Add(new GiveawayItem { Creator = "Amy", Url = "https://amy.club/010826/", Status = "ended", HistorySince = endedBase.AddDays(-9).ToString("o") });
+        endedOrder.Items.Add(new GiveawayItem { Creator = "Max", Url = "https://max.club/010926/", Status = "ended", HistorySince = endedBase.AddDays(-3).ToString("o") });
+        endedOrder.Items.Add(new GiveawayItem { Creator = "Live", Url = "https://live.club/011026/", Status = "active", Ticket = "1 / 2" });
+        endedOrder.Items.Add(new GiveawayItem { Creator = "Abe", Url = "https://abe.club/011026/", Status = "active", Ticket = "5 / 9" });
+        using (MainForm orderForm = new MainForm(endedOrder, false))
+        {
+            orderForm.Show();
+            Application.DoEvents();
+            DataGridView orderGrid = (DataGridView)Field(orderForm, "grid");
+            Func<string> names = delegate { return string.Join(",", orderGrid.Rows.Cast<DataGridViewRow>().Select(r => ((GiveawayItem)r.Tag).Creator).ToArray()); };
+            Check(names() == "Abe,Live", "Active still lists creators alphabetically");
+            ((Button)Field(orderForm, "historyButton")).PerformClick();
+            Check(names() == "Zed,Max,Amy", "History lists the most recently ended giveaway first");
+            ((Button)Field(orderForm, "activeButton")).PerformClick();
+            Check(names() == "Abe,Live", "Leaving History restores the Active sort");
+            ((Button)Field(orderForm, "historyButton")).PerformClick();
+            Check(names() == "Zed,Max,Amy", "Returning to History keeps newest-ended first");
+            Call(orderForm, "GridColumnHeaderMouseClick", orderGrid, new DataGridViewCellMouseEventArgs(5, -1, 0, 0, new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)));
+            Check(names() == "Amy,Max,Zed", "Clicking the History deadline header reverses the order");
+        }
+
         CheckDialogLayout(new SettingsForm(), "Settings dialog");
         CheckDialogLayout(new AddLinkForm(), "Add link dialog");
         Console.WriteLine(checks + " checks passed. Artifacts: " + folder);

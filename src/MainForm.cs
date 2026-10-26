@@ -57,6 +57,15 @@ namespace SkinClubGiveawayDesktop
         private CopyToastControl copyToast;
         private string sortColumn = "Creator";
         private bool sortAscending = true;
+        // Each tab remembers its own sort. History opens with the most recently ended giveaway on top
+        // (its Deadline column holds "Ended", so that column sorts by when the giveaway ended).
+        private string currentSortView = "active";
+        private readonly Dictionary<string, KeyValuePair<string, bool>> sortByView = new Dictionary<string, KeyValuePair<string, bool>>
+        {
+            { "active", new KeyValuePair<string, bool>("Creator", true) },
+            { "joined", new KeyValuePair<string, bool>("Creator", true) },
+            { "history", new KeyValuePair<string, bool>("Deadline", false) }
+        };
 
         // Restrained product-dashboard palette: neutral ink surfaces with precise accent usage.
         private readonly Color Bg = Ui.Bg;
@@ -720,7 +729,8 @@ namespace SkinClubGiveawayDesktop
             else
             {
                 sortColumn = c.Name;
-                sortAscending = true;
+                // In History the Deadline column sorts by when the giveaway ended: newest first.
+                sortAscending = !(showingHistory && c.Name == "Deadline");
             }
             Render();
         }
@@ -1202,6 +1212,13 @@ namespace SkinClubGiveawayDesktop
                     if (cmp == 0) cmp = at.CompareTo(bt);
                 }
             }
+            else if (string.Equals(sortColumn, "Deadline", StringComparison.OrdinalIgnoreCase) && showingHistory)
+            {
+                // Every History row says "Ended"; order by when it ended (when the app saw it end),
+                // then by the giveaway's own date.
+                cmp = GiveawayInfo.Recency(a).CompareTo(GiveawayInfo.Recency(b));
+                if (cmp == 0) cmp = GiveawayInfo.GiveawayDate(a.Url).CompareTo(GiveawayInfo.GiveawayDate(b.Url));
+            }
             else if (string.Equals(sortColumn, "Deadline", StringComparison.OrdinalIgnoreCase))
             {
                 DateTime ad, bd;
@@ -1338,12 +1355,25 @@ namespace SkinClubGiveawayDesktop
             RenderView(true);
         }
 
+        // Save the sort of the tab being left and restore the sort of the tab being opened.
+        private void SwitchSortForView()
+        {
+            string view = showingHistory ? "history" : (showingJoined ? "joined" : "active");
+            if (view == currentSortView) return;
+            sortByView[currentSortView] = new KeyValuePair<string, bool>(sortColumn, sortAscending);
+            KeyValuePair<string, bool> next = sortByView[view];
+            sortColumn = next.Key;
+            sortAscending = next.Value;
+            currentSortView = view;
+        }
+
         // full=false is used while typing in the search box: only the table rows change,
         // so the header counts, theme colours and panel visibility are left alone.
         private void RenderView(bool full)
         {
             if (IsDisposed || Disposing) return;
             filterTimer.Stop();
+            if (!showingLogs) SwitchSortForView();
             if (!full && !showingLogs && filterBox.TextLength > 0)
             {
                 RebuildRows();
@@ -1372,7 +1402,7 @@ namespace SkinClubGiveawayDesktop
             {
                 viewTitle.Text = "Giveaway history";
                 viewSubtitle.Text = AppSettings.Current.HistoryLatestOnly
-                    ? "Each creator's latest ended giveaway  \u00b7  older ones stay saved (see Settings)"
+                    ? "Most recently ended first  \u00b7  each creator's latest giveaway  \u00b7  older ones stay saved (see Settings)"
                     : "The " + AppSettings.Current.HistoryLimit + " most recent ended giveaways  \u00b7  older ones are removed automatically";
             }
             else
