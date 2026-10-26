@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.2] - 2026-10-27
+
+- History now opens with the most recently ended giveaway on top (newest ended first), the sort arrow shows on the Deadline column, and clicking that header reverses the order. Each tab (Active, Joined, History) remembers its own sort.
+
 ## [1.5.1] - 2026-10-23
 
 - Fixed: Portuguese giveaway pages show "FIM" for "ended"; the app did not know the word and a refresh reopened ended giveaways. "FIM" and the "ended" word in several other languages are now recognised, and an ended giveaway is only reopened by a real future deadline.
