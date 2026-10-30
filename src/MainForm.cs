@@ -1580,6 +1580,8 @@ namespace SkinClubGiveawayDesktop
                 // startup/parsing can never make Windows show the spinning busy cursor.
                 HashSet<string> before = ActiveKeys();
                 bool firstScan = string.IsNullOrEmpty(data.LastScan);
+                // A Refresh the user asked for reads every running giveaway's timer again.
+                Scanner.RecheckDeadlines = manual;
                 AppData scanData = CloneDataForScan(data);
                 AppData refreshed = await Task.Run(async delegate
                 {
@@ -1597,7 +1599,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("ERROR", "Refresh failed: " + ex.Message);
                 if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Refresh failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
-            finally { SetScanning(false, ""); ReleaseScanMemory(); }
+            finally { Scanner.RecheckDeadlines = false; SetScanning(false, ""); ReleaseScanMemory(); }
         }
 
         // Hand the memory used by downloaded pages back to Windows once a scan is over.
@@ -1615,6 +1617,7 @@ namespace SkinClubGiveawayDesktop
             int doneMs = 2200;
             try
             {
+                Scanner.RecheckDeadlines = true;
                 AppData scanData = CloneDataForScan(data);
                 AppData scanned = await Task.Run(async delegate
                 {
@@ -1642,7 +1645,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("ERROR", "Deep Search failed: " + ex.Message);
                 if (!IsDisposed && !Disposing) MessageBox.Show(this, ex.Message, "Deep Search failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
-            finally { SetScanning(false, ""); ReleaseScanMemory(); }
+            finally { Scanner.RecheckDeadlines = false; SetScanning(false, ""); ReleaseScanMemory(); }
 
             // Show the result after the buttons are usable again, instead of keeping them disabled for it.
             if (doneText != null && !IsDisposed && !Disposing)

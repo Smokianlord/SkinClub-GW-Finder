@@ -61,6 +61,7 @@ namespace SkinClubGiveawayDesktop
                     item.PromoCode = GiveawayInfo.EntryCodeOrDash(p.PromoCode, item.Url);
                     item.MinimumDeposit = (p.PromoCode != "-" && item.PromoCode == "-") ? "-" : p.MinimumDeposit;
                     item.Deadline = p.Deadline;
+                    bool deadlineFromPage = item.Deadline != "-";
 
                     // Current SkinClub creator pages can inject the hour countdown only
                     // after JavaScript runs. If the direct fetch has a live giveaway but
@@ -73,6 +74,7 @@ namespace SkinClubGiveawayDesktop
                     // reason refreshes took minutes; the deadline/promo/deposit of a running
                     // giveaway do not change once known.
                     bool recentlyRendered = false;
+                    DateTime? lastRenderedAt = null;
                     GiveawayItem prior = null;
                     Dictionary<string, GiveawayItem> priorMap = KnownItems;
                     if (priorMap != null) priorMap.TryGetValue(GiveawayKey(c.Url), out prior);
@@ -80,9 +82,10 @@ namespace SkinClubGiveawayDesktop
                     {
                         item.RenderedAt = prior.RenderedAt;
                         DateTime renderedAt;
-                        recentlyRendered = DateTime.TryParse(prior.RenderedAt, System.Globalization.CultureInfo.InvariantCulture,
-                            System.Globalization.DateTimeStyles.RoundtripKind, out renderedAt) &&
-                            DateTime.UtcNow - renderedAt.ToUniversalTime() < MetadataRetryInterval;
+                        if (DateTime.TryParse(prior.RenderedAt, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.RoundtripKind, out renderedAt))
+                            lastRenderedAt = renderedAt.ToUniversalTime();
+                        recentlyRendered = lastRenderedAt.HasValue && DateTime.UtcNow - lastRenderedAt.Value < MetadataRetryInterval;
                         if (activePage)
                         {
                             DateTime knownDeadline;
@@ -97,7 +100,11 @@ namespace SkinClubGiveawayDesktop
                     }
 
                     bool missingMetadata = (item.PromoCode == "-" || item.MinimumDeposit == "-") && !recentlyRendered;
-                    bool needsRenderedDeadline = activePage && item.Deadline == "-" && !recentlyRendered;
+                    // The saved deadline is only a fallback: the live timer decides (an extended giveaway
+                    // would otherwise keep its old date forever).
+                    bool needsRenderedDeadline = NeedsDeadlineRender(activePage, deadlineFromPage, item.Deadline != "-",
+                        lastRenderedAt, recentlyRendered, RecheckDeadlines,
+                        TimeSpan.FromMinutes(AppSettings.Current.DeadlineRecheckMinutes), DateTime.UtcNow);
 
                     // Deep Search generates some guessed date URLs as a safety net. A guessed URL
                     // that merely returns HTTP 200 must not launch a full Chromium/CDP session.
@@ -117,7 +124,8 @@ namespace SkinClubGiveawayDesktop
                     // giveaways. Saved/social links can still use the rendered metadata path.
                     if (allowRenderedMetadata || needsRenderedDeadline)
                     {
-                        RenderedFields rendered = await FetchRenderedFieldsAsync(item.Url);
+                        if (RecheckDeadlines) ForgetRenderedCache(item.Url);
+                        RenderedFields rendered = await FetchRenderedFieldsAsync(item.Url, !RecheckDeadlines);
                         item.RenderedAt = DateTime.UtcNow.ToString("o");
                         string renderedCode = GiveawayInfo.EntryCodeOrDash(rendered.PromoCode, item.Url);
                         if (renderedCode != "-")

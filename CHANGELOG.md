@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.3] - 2026-10-30
+
+- Fixed: a giveaway's deadline was never updated once it had been saved, so an extended giveaway kept its old date. The live timer is now read again whenever you press Refresh or Deep Search, and on automatic refreshes when the saved deadline is older than 30 minutes (`DeadlineRecheckMinutes` in `settings.json`). Automatic re-checks use at most two browsers at a time.
+
 ## [1.5.2] - 2026-10-27
 
 - History now opens with the most recently ended giveaway on top (newest ended first), the sort arrow shows on the Deadline column, and clicking that header reverses the order. Each tab (Active, Joined, History) remembers its own sort.

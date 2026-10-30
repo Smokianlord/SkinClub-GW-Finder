@@ -202,7 +202,20 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
-        private static async Task<RenderedFields> FetchRenderedFieldsAsync(string url)
+        private static void ForgetRenderedCache(string url)
+        {
+            lock (RenderCacheGate) { RenderCache.Remove(url); }
+        }
+
+        private static async Task<RenderedFields> FetchRenderedFieldsAsync(string url, bool background)
+        {
+            if (!background) return await FetchRenderedFieldsCoreAsync(url);
+            await BackgroundRenderGate.WaitAsync(BrowserProcessManager.ShutdownToken);
+            try { return await FetchRenderedFieldsCoreAsync(url); }
+            finally { BackgroundRenderGate.Release(); }
+        }
+
+        private static async Task<RenderedFields> FetchRenderedFieldsCoreAsync(string url)
         {
             RenderedFields cachedFields;
             if (TryGetRenderedCache(url, out cachedFields))

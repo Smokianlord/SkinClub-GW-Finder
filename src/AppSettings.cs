@@ -22,6 +22,9 @@ namespace SkinClubGiveawayDesktop
         public int MetadataRetryHours { get; set; }
         public int ProbeConcurrency { get; set; }
         public int PerHostConcurrency { get; set; }
+        // A saved deadline is re-read from the page's live timer when it is older than this
+        // (a giveaway can be extended). Refresh and Deep Search always re-read it.
+        public int DeadlineRecheckMinutes { get; set; }
         // Windows-enforced ceilings for the one browser the app runs at a time (root plus children).
         public int BrowserProcessLimit { get; set; }
         public int BrowserConcurrency { get; set; }
@@ -38,6 +41,7 @@ namespace SkinClubGiveawayDesktop
             BrowserPath = "";
             HttpTimeoutSeconds = 20;
             PerHostConcurrency = 4;
+            DeadlineRecheckMinutes = 30;
             RenderTimeoutSeconds = 30;
             MetadataRetryHours = 12;
             ProbeConcurrency = 64;
@@ -67,6 +71,7 @@ namespace SkinClubGiveawayDesktop
             MetadataRetryHours = Clamp(MetadataRetryHours, 1, 168);
             ProbeConcurrency = Clamp(ProbeConcurrency, 4, 128);
             PerHostConcurrency = Clamp(PerHostConcurrency, 1, 16);
+            DeadlineRecheckMinutes = Clamp(DeadlineRecheckMinutes, 5, 1440);
             BrowserProcessLimit = Clamp(BrowserProcessLimit, 5, 256);
             BrowserConcurrency = Clamp(BrowserConcurrency, 1, 16);
             BrowserMemoryLimitMB = Clamp(BrowserMemoryLimitMB, 512, 16384);

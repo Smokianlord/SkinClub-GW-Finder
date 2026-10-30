@@ -134,6 +134,25 @@ namespace SkinClubGiveawayDesktop
             Volatile.Write(ref checksTotal, total);
         }
 
+        // Set while the user's own Refresh / Deep Search runs: every active page's timer is read again
+        // and the render cache is bypassed. Automatic refreshes leave it off and re-read on a schedule.
+        public static volatile bool RecheckDeadlines;
+
+        // Background (automatic) renders use at most two browsers so a periodic re-check never spikes
+        // memory; a user-started scan may use all of them.
+        private static readonly SemaphoreSlim BackgroundRenderGate = new SemaphoreSlim(2, 2);
+
+        // Whether to open the page in a browser to read its countdown. Page text that already contains a
+        // deadline is authoritative; a countdown that only appears after JavaScript runs can change (a
+        // giveaway can be extended), so a saved deadline is re-read when it is old or when forced.
+        internal static bool NeedsDeadlineRender(bool activePage, bool deadlineFromPage, bool haveCarriedDeadline,
+            DateTime? lastRenderedAtUtc, bool recentlyRendered, bool forceRecheck, TimeSpan recheckAfter, DateTime nowUtc)
+        {
+            if (!activePage || deadlineFromPage) return false;
+            if (!haveCarriedDeadline) return !recentlyRendered || forceRecheck;
+            return forceRecheck || !lastRenderedAtUtc.HasValue || nowUtc - lastRenderedAtUtc.Value > recheckAfter;
+        }
+
         // What the scanner is doing right now, for the Logs tab ("Idle" when nothing runs).
         private static volatile string phase = "Idle";
         public static string Phase { get { return phase; } }

@@ -190,6 +190,17 @@ static class RegressionTests
         ParseResult live = Scanner.ParsePage("<html><body><div>Bilhetes restantes: 436 / 625</div><div>Tempo restante: 12h 30m 5s</div></body></html>");
         Check(live.Status == "active", "A running countdown still means active");
 
+        // A saved deadline must follow the live timer (a giveaway can be extended).
+        DateTime clock = new DateTime(2026, 10, 30, 12, 0, 0, DateTimeKind.Utc);
+        TimeSpan thirtyMin = TimeSpan.FromMinutes(30);
+        Check(Scanner.NeedsDeadlineRender(true, false, true, clock.AddMinutes(-45), true, false, thirtyMin, clock), "A saved deadline older than the recheck time is read again from the live timer");
+        Check(!Scanner.NeedsDeadlineRender(true, false, true, clock.AddMinutes(-5), true, false, thirtyMin, clock), "A recently read deadline is not read again on an automatic refresh");
+        Check(Scanner.NeedsDeadlineRender(true, false, true, clock.AddMinutes(-1), true, true, thirtyMin, clock), "A Refresh or Deep Search started by the user always re-reads the timer");
+        Check(Scanner.NeedsDeadlineRender(true, false, true, null, false, false, thirtyMin, clock), "A saved deadline that was never confirmed against the live timer is read again");
+        Check(!Scanner.NeedsDeadlineRender(true, true, true, clock.AddHours(-9), true, true, thirtyMin, clock), "A deadline printed in the page text is used as is, with no browser");
+        Check(!Scanner.NeedsDeadlineRender(false, false, true, clock.AddHours(-9), true, true, thirtyMin, clock), "Ended or unknown pages never open a browser for the deadline");
+        Check(Scanner.NeedsDeadlineRender(true, false, false, null, false, false, thirtyMin, clock) && !Scanner.NeedsDeadlineRender(true, false, false, clock.AddHours(-1), true, false, thirtyMin, clock), "A missing deadline is read once, then retried only after the metadata retry interval");
+
         // A check that fails to read a page must be retried, and never mistaken for "no giveaway here".
         string endedHtml = "<html><body>Tickets left: 0 / 500</body></html>";
         FieldInfo clientField = typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static);
