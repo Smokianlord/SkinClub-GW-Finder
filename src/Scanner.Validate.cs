@@ -122,7 +122,7 @@ namespace SkinClubGiveawayDesktop
 
                     // Promo/minimum-deposit values may also be client-rendered on already-ended
                     // giveaways. Saved/social links can still use the rendered metadata path.
-                    if (allowRenderedMetadata || needsRenderedDeadline)
+                    if (!QuickRefresh && (allowRenderedMetadata || needsRenderedDeadline))
                     {
                         if (RecheckDeadlines) ForgetRenderedCache(item.Url);
                         RenderedFields rendered = await FetchRenderedFieldsAsync(item.Url, !RecheckDeadlines);

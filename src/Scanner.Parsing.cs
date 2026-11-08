@@ -40,6 +40,9 @@ namespace SkinClubGiveawayDesktop
         // instructions or the Skin.Club promo link.  The page also contains a
         // decorative "use promocode" special-prize CTA; treating the next word
         // after that CTA as a code is what produced bogus values such as SKIN.
+        private static readonly Regex DatedEntryCodeRegex = new Regex(
+            @"(?<![A-Za-z0-9_-])LP-[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*-\d{6}(?![A-Za-z0-9_-])",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex PromoQueryRegex = new Regex(
             @"(?:utm_promo|promo_code|promocode)\s*=\s*([A-Za-z0-9][A-Za-z0-9_\-]{2,63})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -71,10 +74,10 @@ namespace SkinClubGiveawayDesktop
         // used near a verified participation promocode so prize values elsewhere
         // on the giveaway page are not mistaken for the deposit requirement.
         private static readonly Regex DepositContextRegex = new Regex(
-            @"replenish|refill|top[ \t-]*up|deposit|recharge|balance|add\s+(?:funds|money)|fund\s+(?:your\s+)?balance|load\s+(?:your\s+)?balance|recarg(?:a|ar|ue)|saldo|dep[oó]sito|depositar|ingres(?:a|ar)|recarregar|carregar\s+saldo|recharg(?:e|er)|solde|einzahl(?:en|ung)|guthaben",
+            @"replenish|refill|top[ \t-]*up|deposit|recharge|balance|add\s+(?:funds|money)|fund\s+(?:your\s+)?balance|load\s+(?:your\s+)?balance|recarg(?:a|ar|ue)|saldo|dep[oó]sito|depositar|ingres(?:a|ar)|recarregar|carregar\s+saldo|recharg(?:e|er)|solde|einzahl(?:en|ung)|guthaben|bakiye|y[üu]kle|yat[ıi]r|رصيد|إيداع|ايداع|شحن|اشحن|пополн|депозит|баланс",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex MoneyAmountRegex = new Regex(
-            @"(?:(?:US|CA|AU)?[$€£]\s*[0-9]+(?:[.,][0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?\s*(?:US[$]|CA[$]|AU[$]|[$€£]|USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT))",
+            @"(?:(?:US|CA|AU)?[$€£]\s*[0-9]+(?:[.,][0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?\s*(?:US[$]|CA[$]|AU[$]|[$€£]|USD|EUR|GBP|USDT|RUB|PLN|BRL|ARS|UAH|BDT|دولار|долл))",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static int? ParseInt(string s)
@@ -362,6 +365,16 @@ namespace SkinClubGiveawayDesktop
                 if (code != "-") return code;
             }
 
+            // In any language, the entry code is the one ending with the giveaway's date (LP-PEEREIRA-011026);
+            // the page's other LP- code is the separate discount code, which carries no date.
+            foreach (string source in new string[] { flat, decoded })
+            {
+                Match dated = DatedEntryCodeRegex.Match(source);
+                if (!dated.Success) continue;
+                string code = NormalizePromoCode(dated.Value);
+                if (code != "-") return code;
+            }
+
             // Fallback to Skin.Club promo links, but prefer the giveaway
             // participation code (normally LP-...) if multiple promo links exist.
             string firstQueryCode = "-";
@@ -394,10 +407,44 @@ namespace SkinClubGiveawayDesktop
 
         private static string NormalizeDepositAmount(string raw)
         {
+            return UsdAmount(raw);
+        }
+
+        private static readonly Regex AmountNumberRegex = new Regex(@"[0-9]+(?:[.,][0-9]+)?", RegexOptions.Compiled);
+        private static readonly Regex OtherCurrencyRegex = new Regex(@"€|£|₺|R\$|\b(?:EUR|GBP|RUB|PLN|BRL|ARS|UAH|BDT|TRY)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // One display form for every deposit: the number followed by $ ("2$", "7.50$"). Pages write the same
+        // amount as $2, US$2, 2 USD, 2$ or 2 USDT. A rare non-dollar amount keeps its currency code instead
+        // of being shown as dollars ("10 EUR").
+        internal static string UsdAmount(string raw)
+        {
             if (string.IsNullOrWhiteSpace(raw)) return "-";
-            string value = Regex.Replace(WebUtility.HtmlDecode(raw), @"\s+", " ").Trim();
-            if (string.IsNullOrWhiteSpace(value)) return "-";
-            return value.ToUpperInvariant();
+            string value = Regex.Replace(WebUtility.HtmlDecode(raw), @"\s+", " ").Trim().ToUpperInvariant();
+            if (value.Length == 0 || value == "-") return "-";
+            Match n = AmountNumberRegex.Match(value);
+            if (!n.Success) return "-";
+            string number = n.Value;
+            int sep = number.IndexOfAny(new[] { '.', ',' });
+            if (sep >= 0)
+            {
+                string fraction = number.Substring(sep + 1);
+                // "1,000" is a thousands separator; "7,5" / "7.50" are decimals.
+                number = fraction.Length == 3 ? number.Substring(0, sep) + fraction : number.Substring(0, sep) + "." + fraction;
+            }
+            decimal amount;
+            if (!decimal.TryParse(number, System.Globalization.NumberStyles.AllowDecimalPoint, System.Globalization.CultureInfo.InvariantCulture, out amount))
+                return "-";
+            string shown = amount == decimal.Truncate(amount)
+                ? decimal.Truncate(amount).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : amount.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            Match other = OtherCurrencyRegex.Match(value);
+            if (other.Success)
+            {
+                string code = other.Value.ToUpperInvariant();
+                if (code == "€") code = "EUR"; else if (code == "£") code = "GBP"; else if (code == "₺") code = "TRY"; else if (code == "R$") code = "BRL";
+                return shown + " " + code;
+            }
+            return shown + "$";
         }
 
         private static string MinimumDepositFromText(string text)
@@ -483,6 +530,26 @@ namespace SkinClubGiveawayDesktop
             return "-";
         }
 
+        // Reads data-giveaway-complete-date (DD.MM.YYYY). The page's own countdown ends at that date's
+        // evening, so the giveaway counts as ended from the next day on; it is never ended early.
+        internal static bool TryCompleteDate(string html, DateTime today, out string deadline, out bool ended)
+        {
+            deadline = "-";
+            ended = false;
+            if (string.IsNullOrEmpty(html)) return false;
+            Match m = CompleteDateRegex.Match(html);
+            if (!m.Success) return false;
+            int day, month, year;
+            if (!int.TryParse(m.Groups[1].Value, out day) || !int.TryParse(m.Groups[2].Value, out month) ||
+                !int.TryParse(m.Groups[3].Value, out year) || month < 1 || month > 12 || year < 2000 || year > 2100 ||
+                day < 1 || day > DateTime.DaysInMonth(year, month))
+                return false;
+            DateTime end = new DateTime(year, month, day);
+            deadline = end.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+            ended = end < today.Date;
+            return true;
+        }
+
         public static ParseResult ParsePage(string html)
         {
             string text = HtmlToText(html);
@@ -491,6 +558,7 @@ namespace SkinClubGiveawayDesktop
             int? total = null;
             Match tm = TicketLineRegex.Match(text);
             if (!tm.Success) tm = TicketFallbackRegex.Match(text);
+            if (!tm.Success) tm = TicketGenericRegex.Match(text);
             if (tm.Success)
             {
                 remaining = ParseInt(tm.Groups[1].Value);
@@ -509,9 +577,19 @@ namespace SkinClubGiveawayDesktop
             bool explicitEnded = false;
             bool hasLiveDeadlineSignal = false;
 
-            // Prefer the exact current visible timer format before any legacy parser.
-            string visibleDeadline = DeadlineFromRenderedCompletionText(text);
-            if (visibleDeadline == "-") visibleDeadline = DeadlineFromVisibleText(text);
+            // The end date written into the page (any language) comes first. Without it, prefer the exact
+            // current visible timer format before any legacy parser.
+            string visibleDeadline;
+            bool completeEnded;
+            if (TryCompleteDate(html, DateTime.Now.Date, out visibleDeadline, out completeEnded))
+            {
+                if (completeEnded) visibleDeadline = "Ended";
+            }
+            else
+            {
+                visibleDeadline = DeadlineFromRenderedCompletionText(text);
+                if (visibleDeadline == "-") visibleDeadline = DeadlineFromVisibleText(text);
+            }
             if (string.Equals(visibleDeadline, "Ended", StringComparison.OrdinalIgnoreCase))
             {
                 explicitEnded = true;

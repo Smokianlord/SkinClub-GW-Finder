@@ -6,9 +6,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("SkinClub GW Finder")]
 [assembly: AssemblyProduct("SkinClub GW Finder")]
 [assembly: AssemblyDescription("SkinClub creator giveaway monitor")]
-[assembly: AssemblyVersion("1.5.3.0")]
-[assembly: AssemblyFileVersion("1.5.3.0")]
-[assembly: AssemblyInformationalVersion("1.5.3")]
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyInformationalVersion("2.0.0")]
 
 namespace SkinClubGiveawayDesktop
 {

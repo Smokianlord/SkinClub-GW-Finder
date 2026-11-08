@@ -47,6 +47,7 @@ namespace SkinClubGiveawayDesktop
                 if (data == null) data = DefaultData();
                 if (data.Items == null) data.Items = new List<GiveawayItem>();
                 data.Items.RemoveAll(delegate(GiveawayItem item) { return item == null || string.IsNullOrWhiteSpace(item.Url); });
+                bool normalized = false;
                 foreach (GiveawayItem item in data.Items)
                 {
                     if (item == null) continue;
@@ -56,6 +57,9 @@ namespace SkinClubGiveawayDesktop
                         upper == "PRIZE" || upper == "POOL" || upper == "DISCOUNT" ||
                         upper == "PROMO" || upper == "PROMOCODE" || upper == "CODE")
                         item.PromoCode = "-";
+                    // Older builds saved deposits as "$10", "US$10" and so on; show them all as "10$".
+                    string deposit = Scanner.UsdAmount(item.MinimumDeposit);
+                    if (deposit != (item.MinimumDeposit ?? "")) { item.MinimumDeposit = deposit; normalized = true; }
                 }
 
                 // Repair metadata contaminated by the old concurrent Chromium/CDP race, and entry
@@ -66,7 +70,7 @@ namespace SkinClubGiveawayDesktop
                 if (repaired && !File.Exists(beforeRepair)) File.Copy(DataFile, beforeRepair, false);
                 int previousCount = data.Items.Count;
                 PruneOldHistory(data);
-                if (repaired || data.Items.Count != previousCount) Save(data);
+                if (repaired || normalized || data.Items.Count != previousCount) Save(data);
                 return data;
             }
             catch

@@ -21,6 +21,10 @@ $arguments = @(
     '/reference:System.Windows.Forms.dll', '/reference:System.Net.Http.dll', '/reference:System.Web.Extensions.dll'
 )
 if ($Main) { $arguments += "/main:$Main" }
+# Icons (assets/icons/*.png) are embedded in the exe as SkinClubGWFinder.Icons.<name>.png.
+foreach ($icon in @(Get-ChildItem (Join-Path $repo 'assets/icons') -Filter *.png -ErrorAction SilentlyContinue)) {
+    $arguments += "/resource:$($icon.FullName),SkinClubGWFinder.Icons.$($icon.Name)"
+}
 & $compiler @arguments @sources
 if ($LASTEXITCODE -ne 0) { throw "Build failed (csc exit code $LASTEXITCODE)" }
 Write-Host "Built $Output"

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Drawing;
 using System.Reflection;
@@ -106,6 +107,7 @@ static class RegressionTests
         DataStore.Save(data);
         Check(File.Exists(DataStore.DataFile + ".bak"), "Atomic save keeps a backup");
         Check(DataStore.Load().Items.Count == 3, "Saved items and old joined items survive reload");
+        Check(DataStore.Load().Items.First(i => i.Creator == "Alpha").MinimumDeposit == "10$", "Saved deposits like $10 are shown as 10$ after loading");
         File.WriteAllText(DataStore.DataFile, "{\"Items\":[null,{\"Url\":null},{\"Url\":\"https://alpha.club/010926/\",\"Status\":\"active\"}]}");
         Check(DataStore.Load().Items.Count == 1, "Invalid saved entries are removed safely");
         File.WriteAllText(DataStore.DataFile, "broken json");
@@ -127,16 +129,17 @@ static class RegressionTests
         File.WriteAllText(DataStore.DataFile, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(history));
         Check(DataStore.Load().Items.Count == 32 && !File.ReadAllText(DataStore.DataFile).Contains("https://history.club/6\""), "Loading oversized history removes and persists excess entries");
         AppSettings tuned = new AppSettings { RefreshMinutes = 0, HistoryLimit = 100000, HttpTimeoutSeconds = -5 };
-        tuned.ExtraCreators["Good"] = "WWW.Good.Club";
-        tuned.ExtraCreators["Bad"] = "not a domain";
-        tuned.ExtraCreators["Path"] = "evil.club/steal";
         AppSettings.Current = tuned;
         Check(tuned.RefreshMinutes == 1 && tuned.HistoryLimit == 500 && tuned.HttpTimeoutSeconds == 3, "Settings values are clamped to safe ranges");
-        Check(tuned.ExtraCreators.Count == 1 && tuned.ExtraCreators["Good"] == "good.club", "Only valid extra creator domains are kept");
+        tuned.HistoryLimit = 44;
         tuned.Save();
         Check(File.ReadAllText(AppSettings.SettingsFile).Contains("\"RefreshMinutes\": 1"), "Settings are saved as readable JSON");
         typeof(AppSettings).GetField("current", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
-        Check(AppSettings.Current.ExtraCreators.ContainsKey("Good"), "Saved settings load back");
+        Check(AppSettings.Current.HistoryLimit == 44, "Saved settings load back");
+        // A settings.json written by an older version still has BrowserPath and ExtraCreators.
+        File.WriteAllText(AppSettings.SettingsFile, "{\"RefreshMinutes\": 7, \"BrowserPath\": \"C:\\\\x\\\\chrome.exe\", \"ExtraCreators\": {\"Someone\": \"someone.club\"}}");
+        typeof(AppSettings).GetField("current", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
+        Check(AppSettings.Current.RefreshMinutes == 7, "An older settings.json with removed options still loads");
         File.WriteAllText(AppSettings.SettingsFile, "{ not json");
         typeof(AppSettings).GetField("current", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
         Check(AppSettings.Current.HistoryLimit == 30, "Broken settings.json falls back to defaults");
@@ -189,6 +192,71 @@ static class RegressionTests
         }
         ParseResult live = Scanner.ParsePage("<html><body><div>Bilhetes restantes: 436 / 625</div><div>Tempo restante: 12h 30m 5s</div></body></html>");
         Check(live.Status == "active", "A running countdown still means active");
+        foreach (string word in new string[] { "BİTİŞ", "Bitiş", "النهاية" })
+        {
+            ParseResult over = Scanner.ParsePage("<html><body><div>Bilhetes restantes: 436 / 625</div><div>Tempo restante: " + word + "</div></body></html>");
+            Check(over.Status == "ended", "The Turkish/Arabic ended word '" + word + "' means the giveaway is over");
+        }
+
+        // Current creator pages, in any language, carry their end date in the HTML (no browser needed).
+        System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+        string soon = DateTime.Now.AddDays(5).ToString("dd.MM.yyyy", inv);
+        string soonShown = DateTime.Now.AddDays(5).ToString("MMM d, yyyy", inv).ToUpperInvariant();
+        string past = DateTime.Now.AddDays(-3).ToString("dd.MM.yyyy", inv);
+        Func<string, string, string, string> page = delegate(string label, string body, string date)
+        {
+            return "<html><body><div>" + body + "</div><p>" + label + " <b class=\"giveaway-timecomplete\" data-giveaway-complete-date=\"" + date +
+                "\" data-giveaway-complete-time=\"23:59\"></b></p><script>var t = { countdownEnd: \"END\" };</script></body></html>";
+        };
+        ParseResult arabic = Scanner.ParsePage(page("الوقت المتبقي حتى النهاية:", "التذاكر المتبقية: 974 / 1000", soon));
+        Check(arabic.Status == "active" && arabic.Ticket == "974 / 1000" && arabic.Deadline == soonShown, "An Arabic page is read: tickets, deadline and active status");
+        ParseResult turkish = Scanner.ParsePage(page("Bitişe kalan süre:", "ADIM 2 Bakiyenizi en az 5$ yükleyin ve LP-WTCN-011026 promosyon kodunu kullanın <a href=\"https://skin.club/en?utm_promo=LP-WTCN-011026\">KODU KULLAN</a>", soon));
+        Check(turkish.Status == "active" && turkish.Deadline == soonShown, "A Turkish leaderboard page without tickets is active until its end date");
+        Check(turkish.PromoCode == "LP-WTCN-011026" && turkish.MinimumDeposit == "5$", "A Turkish page's promocode and minimum deposit are read");
+        ParseResult spanishOver = Scanner.ParsePage(page("Tiempo restante:", "Tickets restantes: 461 / 625", past));
+        Check(spanishOver.Status == "ended" && spanishOver.Deadline == "Ended", "A page whose end date has passed is ended, even with tickets left");
+        ParseResult otherLanguage = Scanner.ParsePage(page("Czas do końca:", "Pozostałe losy: 12 / 50", soon));
+        Check(otherLanguage.Ticket == "12 / 50" && otherLanguage.Status == "active", "Tickets are read from a page in a language the app has no words for");
+        string todayDeadline; bool todayEnded;
+        Check(Scanner.TryCompleteDate("data-giveaway-complete-date=\"" + DateTime.Now.ToString("dd.MM.yyyy", inv) + "\"", DateTime.Now.Date, out todayDeadline, out todayEnded) && !todayEnded,
+            "A giveaway ending today is still active today");
+
+        // Deposits are shown as USD in one form: "2$".
+        Check(Scanner.UsdAmount("US$2") == "2$" && Scanner.UsdAmount("US$$2") == "2$" && Scanner.UsdAmount("$10") == "10$" &&
+              Scanner.UsdAmount("5 USD") == "5$" && Scanner.UsdAmount("7,50 $") == "7.50$" && Scanner.UsdAmount("15 USDT") == "15$" &&
+              Scanner.UsdAmount("-") == "-" && Scanner.UsdAmount(null) == "-", "Deposit amounts are shown as USD like 2$");
+        Check(Scanner.UsdAmount("10€") == "10 EUR" && Scanner.UsdAmount("R$ 25") == "25 BRL", "A non-dollar deposit keeps its own currency instead of being shown as dollars");
+
+        // Several links can be added at once; anything that is not one whole giveaway link is skipped.
+        List<string> skipped;
+        List<string> pasted = Scanner.ParseLinkList("https://peereira.club/011026/\r\n\r\nhttps://neok.club/011026\r\nhttps://PEEREIRA.club/011026/ , notes here\nhttps://evil.club/010926/--user-data-dir=C:\\x", out skipped);
+        Check(pasted.Count == 2 && pasted[0] == "https://peereira.club/011026/" && pasted[1] == "https://neok.club/011026/", "Pasted links are split, normalised and de-duplicated");
+        Check(skipped.Count == 3 && skipped.Contains("notes") && skipped.Contains("here"), "Pasted text that is not a giveaway link is skipped and reported");
+
+        // New creators are probed by Deep Search.
+        Check(Scanner.InferCreator("https://thetaco.club/011026/", null) == "TACO" && Scanner.InferCreator("https://maherco.club/011026/", null) == "Maherco",
+            "Creators found in November 2026 are built in");
+        List<string> slugs = (List<string>)typeof(Scanner).GetMethod("FastProbeSlugs", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+        DateTime nextMonth = DateTime.Now.AddMonths(1);
+        Check(slugs.Contains(string.Format("01{0:00}{1:00}", nextMonth.Month, nextMonth.Year % 100)), "Deep Search also probes next month's giveaway date");
+
+        // The Refresh button never opens a browser.
+        typeof(Scanner).GetField("Client", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null,
+            new HttpClient(new FixedPageHandler("<html><body>Tickets left: 10 / 500</body></html>")));
+        Scanner.QuickRefresh = true;
+        GiveawayItem quick = Scanner.ValidateAsync(new Candidate("Quick", "https://quick.club/011126/", "saved"), new SemaphoreSlim(1)).GetAwaiter().GetResult();
+        Scanner.QuickRefresh = false;
+        Check(quick.Status == "active" && quick.Ticket == "10 / 500" && quick.RenderedAt == null, "Refresh reads tickets from the page without opening a browser");
+
+        // Every 3D icon the interface uses is embedded in the exe.
+        string[] iconNames = { Icons.Gift, Icons.Package, Icons.Stopwatch, Icons.Check, Icons.Coin, Icons.MoneyBag, Icons.Banknote, Icons.MoneyWings,
+            Icons.Gem, Icons.Dagger, Icons.Trophy, Icons.Crown, Icons.Star, Icons.GlowingStar, Icons.Gamepad, Icons.Magnifier, Icons.Hourglass, Icons.Fire };
+        Check(iconNames.All(n => Icons.Get(n, 32) != null), "All 3D icons are embedded in the app");
+
+        // The browser for page details is found automatically, Edge first.
+        string standardEdge = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\Edge\Application\msedge.exe");
+        string chosen = Scanner.FindChromiumBrowser();
+        Check(!File.Exists(standardEdge) || (chosen != null && chosen.EndsWith("msedge.exe", StringComparison.OrdinalIgnoreCase)), "Edge is used for page details when it is installed");
 
         // A saved deadline must follow the live timer (a giveaway can be extended).
         DateTime clock = new DateTime(2026, 10, 30, 12, 0, 0, DateTimeKind.Utc);
@@ -200,6 +268,19 @@ static class RegressionTests
         Check(!Scanner.NeedsDeadlineRender(true, true, true, clock.AddHours(-9), true, true, thirtyMin, clock), "A deadline printed in the page text is used as is, with no browser");
         Check(!Scanner.NeedsDeadlineRender(false, false, true, clock.AddHours(-9), true, true, thirtyMin, clock), "Ended or unknown pages never open a browser for the deadline");
         Check(Scanner.NeedsDeadlineRender(true, false, false, null, false, false, thirtyMin, clock) && !Scanner.NeedsDeadlineRender(true, false, false, clock.AddHours(-1), true, false, thirtyMin, clock), "A missing deadline is read once, then retried only after the metadata retry interval");
+
+        // The automatic timer must also find new giveaways, not only re-check saved ones.
+        Check(Scanner.AutoDeepSearchDue(null, null, 60, clock), "An automatic Deep Search runs when none has ever completed");
+        Check(Scanner.AutoDeepSearchDue(clock.AddMinutes(-61).ToString("o"), null, 60, clock), "An automatic Deep Search runs once the interval has passed");
+        Check(!Scanner.AutoDeepSearchDue(clock.AddMinutes(-20).ToString("o"), null, 60, clock), "A recent Deep Search means the timer only refreshes saved giveaways");
+        Check(!Scanner.AutoDeepSearchDue(clock.AddDays(-2).ToString("o"), clock.AddMinutes(-10), 60, clock), "A failed automatic Deep Search is not retried on every timer tick");
+        Check(!Scanner.AutoDeepSearchDue(null, null, 0, clock), "Automatic Deep Search can be turned off");
+        Check(new AppSettings().AutoDeepSearchMinutes == 60, "Automatic Deep Search is on by default, hourly");
+        AppSettings deepTuned = new AppSettings { AutoDeepSearchMinutes = 3 };
+        deepTuned.Normalize();
+        AppSettings deepOff = new AppSettings { AutoDeepSearchMinutes = -7 };
+        deepOff.Normalize();
+        Check(deepTuned.AutoDeepSearchMinutes == 15 && deepOff.AutoDeepSearchMinutes == 0, "Automatic Deep Search interval is at least 15 minutes, and 0 or less means off");
 
         // A check that fails to read a page must be retried, and never mistaken for "no giveaway here".
         string endedHtml = "<html><body>Tickets left: 0 / 500</body></html>";
@@ -288,6 +369,18 @@ static class RegressionTests
             Button add = (Button)Field(form, "addButton");
             Check(add.Left >= 0 && add.Right <= add.Parent.ClientSize.Width, "All header actions fit at minimum size");
             Check(grid.GetCellDisplayRectangle(6, 0, false).Right <= grid.ClientSize.Width, "Row actions fit without horizontal scrolling at minimum size");
+            // The longest real creator name and entry code fit in full (no "...") at the minimum size.
+            int nameRoom = grid.Columns["Creator"].Width - 16 - 32 - 12 - 8;
+            int codeRoom = grid.Columns["PromoCode"].Width - 16 - 52 - 22;
+            using (Font nameFont = new Font("Segoe UI Semibold", 10F))
+            using (Font codeFont = new Font("Consolas", 9F))
+                Check(TextRenderer.MeasureText("Paulinhoeletric", nameFont, new Size(4000, 60), TextFormatFlags.NoPadding).Width <= nameRoom &&
+                      TextRenderer.MeasureText("LP-PAULINHOELETRIC-021026", codeFont, new Size(4000, 60), TextFormatFlags.NoPadding).Width <= codeRoom,
+                      "Long creator names and entry codes are shown in full at minimum size");
+            int linkRoom = grid.Columns["Link"].Width - 32 - 30;
+            using (Font linkFont = new Font("Segoe UI", 8F))
+                Check(TextRenderer.MeasureText("drewunboxing.club/011126", linkFont, new Size(4000, 60), TextFormatFlags.NoPadding).Width <= linkRoom,
+                    "Long giveaway links are shown in full at minimum size");
             using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
             { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(Path.Combine(folder, "minimum-window.png")); }
             form.Size = new Size(1240, 800);

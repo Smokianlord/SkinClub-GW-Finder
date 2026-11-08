@@ -7,16 +7,20 @@ using System.Web.Script.Serialization;
 
 namespace SkinClubGiveawayDesktop
 {
-    // User-editable options, stored next to data.json as settings.json. Every value is
-    // clamped on load so a hand-edited file can never put the app into a broken state.
+    // Options from the Settings dialog, stored next to data.json as settings.json. Every value is
+    // clamped on load so a damaged file can never put the app into a broken state. Options that
+    // older versions saved (BrowserPath, ExtraCreators) are ignored when the file is read.
     public class AppSettings
     {
         public int RefreshMinutes { get; set; }
+        // How often the automatic timer also runs a full Deep Search to find new giveaways
+        // (0 = never; only the Deep Search button finds new ones then). A Refresh only
+        // re-checks giveaways that are already saved.
+        public int AutoDeepSearchMinutes { get; set; }
         public int HistoryLimit { get; set; }
         public bool Notifications { get; set; }
         // History shows only each creator's newest ended giveaway (older ones stay saved).
         public bool HistoryLatestOnly { get; set; }
-        public string BrowserPath { get; set; }
         public int HttpTimeoutSeconds { get; set; }
         public int RenderTimeoutSeconds { get; set; }
         public int MetadataRetryHours { get; set; }
@@ -29,16 +33,14 @@ namespace SkinClubGiveawayDesktop
         public int BrowserProcessLimit { get; set; }
         public int BrowserConcurrency { get; set; }
         public int BrowserMemoryLimitMB { get; set; }
-        // Creator name -> domain, added to the built-in list (for example "Someone": "someone.club").
-        public Dictionary<string, string> ExtraCreators { get; set; }
 
         public AppSettings()
         {
             RefreshMinutes = 10;
+            AutoDeepSearchMinutes = 60;
             HistoryLimit = 30;
             Notifications = true;
             HistoryLatestOnly = true;
-            BrowserPath = "";
             HttpTimeoutSeconds = 20;
             PerHostConcurrency = 4;
             DeadlineRecheckMinutes = 30;
@@ -48,7 +50,6 @@ namespace SkinClubGiveawayDesktop
             BrowserProcessLimit = 128;
             BrowserConcurrency = 6;
             BrowserMemoryLimitMB = 4096;
-            ExtraCreators = new Dictionary<string, string>();
         }
 
         private static AppSettings current;
@@ -65,6 +66,9 @@ namespace SkinClubGiveawayDesktop
         public void Normalize()
         {
             RefreshMinutes = Clamp(RefreshMinutes, 1, 1440);
+            // A Deep Search sends a few hundred search and page requests; more often than every
+            // 15 minutes would mostly get the app rate-limited by the search sites.
+            AutoDeepSearchMinutes = AutoDeepSearchMinutes <= 0 ? 0 : Clamp(AutoDeepSearchMinutes, 15, 1440);
             HistoryLimit = Clamp(HistoryLimit, 5, 500);
             HttpTimeoutSeconds = Clamp(HttpTimeoutSeconds, 3, 60);
             RenderTimeoutSeconds = Clamp(RenderTimeoutSeconds, 10, 120);
@@ -75,19 +79,6 @@ namespace SkinClubGiveawayDesktop
             BrowserProcessLimit = Clamp(BrowserProcessLimit, 5, 256);
             BrowserConcurrency = Clamp(BrowserConcurrency, 1, 16);
             BrowserMemoryLimitMB = Clamp(BrowserMemoryLimitMB, 512, 16384);
-            if (BrowserPath == null) BrowserPath = "";
-            Dictionary<string, string> clean = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (ExtraCreators != null)
-            {
-                foreach (KeyValuePair<string, string> kv in ExtraCreators)
-                {
-                    string domain = (kv.Value ?? "").Trim().ToLowerInvariant();
-                    if (domain.StartsWith("www.")) domain = domain.Substring(4);
-                    if (string.IsNullOrWhiteSpace(kv.Key) || !domain.EndsWith(".club") || domain.Contains("/") || domain.Contains(" ")) continue;
-                    clean[kv.Key.Trim()] = domain;
-                }
-            }
-            ExtraCreators = clean;
         }
 
         private static int Clamp(int value, int min, int max)
@@ -133,13 +124,7 @@ namespace SkinClubGiveawayDesktop
             }
         }
 
-        // Writes the file once so users can find and edit it (ExtraCreators etc.).
-        public static void EnsureFileExists()
-        {
-            if (!File.Exists(SettingsFile)) Current.Save();
-        }
-
-        // JavaScriptSerializer emits one line; add line breaks so the file is hand-editable.
+        // JavaScriptSerializer emits one line; add line breaks so the file is readable.
         private static string Indent(string json)
         {
             StringBuilder sb = new StringBuilder();

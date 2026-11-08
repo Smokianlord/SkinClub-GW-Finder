@@ -1,47 +1,46 @@
 # SkinClub GW Finder
 
-**SkinClub GW Finder** is a Windows desktop app for discovering, validating, tracking, and organizing direct SkinClub creator giveaway links.
-
-It focuses on actual dated giveaway landing pages rather than creator homepages or generic referral links.
-
-> **Unofficial project:** This app is not affiliated with, endorsed by, or sponsored by SkinClub or any creator/partner it discovers.
+A Windows desktop app that finds SkinClub creator giveaways, checks each one, and keeps them organised so you can see at a glance what is running, what you joined, and what has ended.
 
 ![SkinClub GW Finder](docs/screenshot.png)
 
 ## Features
 
-- **Deep Search** across public sources, including YouTube, Telegram, web search, and known creator `.club` domains.
-- **Direct-page validation** before a giveaway is added to the tracker.
-- **Active / Joined / History workflow** for keeping giveaways organized.
-- **History:** shows each creator's latest ended giveaway (newest dated link) with its saved promocode and minimum deposit; older ones stay saved and can be shown again in Settings. The History size limit (30 by default, configurable) removes the oldest extras automatically, but never a creator's latest giveaway, and Joined giveaways are preserved.
-- **Never silently miss a giveaway:** failed or timed-out page checks are retried, requests per site are capped, and any page that still cannot be reached is re-checked and reported instead of being skipped.
-- **Joined exclusivity:** joining a giveaway removes it from Active or History and shows it only in Joined. Removing it from Joined restores it to its real Active/History state.
-- **Ticket tracking** with `remaining / total` values when available.
-- **Deadline parsing** with clean uppercase calendar dates.
-- **Sorting** by creator, URL, tickets remaining, and deadline.
-- **Filtering/search** by creator name, all fields, URL, ticket count, or deadline.
-- **Copy and open actions** for direct giveaway links.
-- **Automatic refresh** every 10 minutes, plus manual Refresh.
-- **Persistent local data** between launches.
-- **Bounded browser usage:** up to 6 pages render at once (`BrowserConcurrency`), each in its own browser that Windows limits to 128 processes (`BrowserProcessLimit`), with a shared 4 GB memory budget (`BrowserMemoryLimitMB`) split between them. All three are in `settings.json`. The complete process group is terminated and checked after each page, even if the original browser process already exited. Rendering has a 30-second timeout and an independent 45-second cleanup watchdog.
-- **Logs tab:** live page checks, render queue, browser launches, results, failures, and confirmed cleanup. Shows the current browser process count and queued pages, with Copy/Clear actions and a bounded 2,000-event session history.
+### Finding giveaways
+- **Deep Search** looks through Telegram, YouTube, web search and about 50 known creator sites, and checks the dated giveaway pages each creator usually posts (the 1st and 2nd of recent months and next month).
+- **Learns new creators:** once one link from a creator is saved, that creator's later giveaways are found automatically.
+- **Automatic search:** a Deep Search runs by itself every 60 minutes and the saved giveaways are re-checked every 10 minutes. Starting the app only does the quick re-check.
+- **Notifications:** an optional Windows notification when a new giveaway appears or one ends today.
 
-- **Settings dialog and `settings.json`:** refresh interval, History size, notifications and browser choice, plus advanced options (timeouts, `ExtraCreators` to track a new creator domain without recompiling).
-- **Notifications:** an optional Windows tray notification when an automatic refresh finds a new giveaway or one ends today.
-- **Single instance and crash log:** starting a second copy brings the first to the front. Unexpected errors are written to `crash.log` in the data folder instead of disappearing.
-- **Lean scans:** pages are fetched headers-first with a size cap, checks overlap with discovery, and memory is returned to Windows when a scan ends.
+### Reading each giveaway
+- **Works in any language:** English, Spanish, Portuguese, Turkish, Arabic and others.
+- **Shows what matters:** tickets left out of the total, the entry promocode, the minimum deposit (always in USD, for example `5$`) and the deadline with how many days are left.
+- **Every page is checked** before it is added, and pages that do not answer are tried again instead of being skipped.
+
+### Keeping them organised
+- **Active, Joined and History tabs.** Press **+** to move a giveaway to Joined; press **×** there to send it back.
+- **History** keeps ended giveaways, newest first, with their promocode and deposit.
+- **Stats strip:** active giveaways and tickets left, giveaways ending within 48 hours, joined giveaways, and the cheapest entry.
+- **Sort** any column and **search** by creator, link, tickets, promocode, deposit or deadline (Ctrl+F).
+- **One click** opens a giveaway or copies its link or promocode.
+
+### Everyday use
+- **Refresh** re-checks tickets, deadlines and ended status of your saved giveaways in a few seconds.
+- **Add links:** paste one or many giveaway links at once, one per line.
+- **Logs** show what the app is doing during a search.
+- **Settings** for the check intervals, History size, notifications and History display.
+- **Your data stays on your PC** and carries over between versions.
 
 ## Install
 
-For downloads, use [GitHub Releases](https://github.com/Smokianlord/SkinClub-GW-Finder/releases). Extract the Windows ZIP, close older copies, and run `SkinClubGWFinder.exe`. Requires Windows 10/11, .NET Framework 4.8, and Edge or Chrome for rendered-page metadata. No installer is needed; builds are unsigned.
+Download the latest Windows ZIP from [Releases](https://github.com/Smokianlord/SkinClub-GW-Finder/releases), extract it, close any older copy, and run `SkinClubGWFinder.exe`. No installer is needed.
 
-Saved data lives in `%LOCALAPPDATA%\SkinClub GW Finder\data.json`; options are in `settings.json` and error reports in `crash.log` in the same folder. Back it up before upgrading if you need all older History entries: v1.3.0 automatically keeps only the 30 most recent History giveaways. Joined entries are preserved.
+Requires Windows 10 or 11 with .NET Framework 4.8 (included with Windows). Microsoft Edge, which comes with Windows, is used in the background for the few pages that need it.
 
-## Building
+Saved giveaways are kept in `%LOCALAPPDATA%\SkinClub GW Finder\`.
 
-The source is in `src/` (data store, scanner split into parsing/render/validate/discovery, UI, settings). `scripts/build.ps1` is the one place that compiles it; `BUILD_EXE.bat`, CI, the tests and the release script all call it, so new `.cs` files under `src/` are picked up automatically.
+## Building from source
 
-Run `BUILD_EXE.bat` to compile and launch the app. Run `powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1` to create release assets without launching it. Assets and upload instructions are written to `dist/v1.5.3/`.
+Run `BUILD_EXE.bat` to compile and start the app, or `scripts/build.ps1` to compile only. `scripts/package-release.ps1` creates the release files in `dist/`.
 
-Run `tests/run.ps1` for UI and persistence checks, `tests/run-browser.ps1` for process limits and cleanup checks, and `tests/run-live.ps1` to validate the four real September 2026 giveaway links. Live tests make network requests and can fail if those pages change or become unavailable. Tests do not modify your saved giveaways.
-
+Tests: `tests/run.ps1` (interface and saved data) and `tests/run-browser.ps1` (background browser handling).

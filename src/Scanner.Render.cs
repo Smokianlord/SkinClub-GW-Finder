@@ -22,37 +22,63 @@ namespace SkinClubGiveawayDesktop
 {
     public static partial class Scanner
     {
-        private static string FindChromiumBrowser()
+        // Browsers that can render a page headless, best first. Edge comes first: it is installed on
+        // every Windows 10/11 PC and kept up to date by Windows, so nothing extra is needed. Chrome,
+        // Brave and Chromium follow. Every render uses the same low-resource switches (no GPU, no
+        // images, one renderer process) and its own Windows job with a memory cap.
+        private static readonly string[][] BrowserCandidates = new string[][]
         {
-            string custom = AppSettings.Current.BrowserPath;
-            if (!string.IsNullOrWhiteSpace(custom) && File.Exists(custom)) return custom;
-            if (!string.IsNullOrWhiteSpace(custom)) ActivityLog.Write("WARN", "Configured browser not found, using automatic detection: " + custom);
+            new string[] { "msedge.exe", @"Microsoft\Edge\Application" },
+            new string[] { "chrome.exe", @"Google\Chrome\Application" },
+            new string[] { "brave.exe", @"BraveSoftware\Brave-Browser\Application" },
+            new string[] { "chrome.exe", @"Chromium\Application" },
+        };
+        private static string chosenBrowser;
 
-            List<string> paths = new List<string>();
-            string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        internal static string FindChromiumBrowser()
+        {
+            string known = chosenBrowser;
+            if (known != null && File.Exists(known)) return known;
 
-            if (!string.IsNullOrWhiteSpace(pf86))
+            string[] roots = new string[]
             {
-                paths.Add(Path.Combine(pf86, "Microsoft", "Edge", "Application", "msedge.exe"));
-                paths.Add(Path.Combine(pf86, "Google", "Chrome", "Application", "chrome.exe"));
-            }
-            if (!string.IsNullOrWhiteSpace(pf))
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            };
+            foreach (string[] candidate in BrowserCandidates)
             {
-                paths.Add(Path.Combine(pf, "Microsoft", "Edge", "Application", "msedge.exe"));
-                paths.Add(Path.Combine(pf, "Google", "Chrome", "Application", "chrome.exe"));
-                paths.Add(Path.Combine(pf, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"));
+                List<string> paths = new List<string>();
+                foreach (string root in roots)
+                    if (!string.IsNullOrWhiteSpace(root)) paths.Add(Path.Combine(root, candidate[1], candidate[0]));
+                // Also where Windows says the browser is installed, for non-standard install folders.
+                string registered = RegisteredAppPath(candidate[0]);
+                if (registered != null && registered.IndexOf(candidate[1], StringComparison.OrdinalIgnoreCase) >= 0) paths.Add(registered);
+                foreach (string path in paths)
+                {
+                    if (!File.Exists(path)) continue;
+                    chosenBrowser = path;
+                    ActivityLog.Write("BROWSER", "Using " + path + " for page details");
+                    return path;
+                }
             }
-            if (!string.IsNullOrWhiteSpace(local))
-            {
-                paths.Add(Path.Combine(local, "Microsoft", "Edge", "Application", "msedge.exe"));
-                paths.Add(Path.Combine(local, "Google", "Chrome", "Application", "chrome.exe"));
-                paths.Add(Path.Combine(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"));
-            }
+            return null;
+        }
 
-            foreach (string path in paths)
-                if (File.Exists(path)) return path;
+        private static string RegisteredAppPath(string exe)
+        {
+            foreach (Microsoft.Win32.RegistryKey hive in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine })
+            {
+                try
+                {
+                    using (Microsoft.Win32.RegistryKey key = hive.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + exe))
+                    {
+                        string value = key == null ? null : key.GetValue(null) as string;
+                        if (!string.IsNullOrWhiteSpace(value)) return value.Trim().Trim('"');
+                    }
+                }
+                catch (Exception swallowed) { Diag.Swallow("Looking up " + exe, swallowed); }
+            }
             return null;
         }
 

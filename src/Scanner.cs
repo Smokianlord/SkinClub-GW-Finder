@@ -24,9 +24,17 @@ namespace SkinClubGiveawayDesktop
     {
         public static readonly SemaphoreSlim ScanLock = new SemaphoreSlim(1, 1);
 
-        // Built-in creators. More can be added without recompiling through ExtraCreators in settings.json.
+        // Built-in creators. Every creator site runs on the same SkinClub server, so a guessed domain can
+        // be confirmed by where it points. Any other creator domain that is saved (a link added by hand or
+        // found by Deep Search) is probed automatically as well, so this list does not have to be complete.
         private static readonly Dictionary<string, string> BuiltInCreators = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
+            // Pages in Spanish, Portuguese, Turkish and Arabic (added November 2026).
+            {"Peereira", "peereira.club"}, {"Neok", "neok.club"}, {"Lekoen", "lekoen.club"},
+            {"Lukinhas", "lukinhas.club"}, {"Garmour", "garmour.club"}, {"Pinkdrive", "pinkdrive.club"},
+            {"BrunoCS2", "brunocs2.club"}, {"TACO", "thetaco.club"}, {"Paulinhoeletric", "paulinho.club"},
+            {"Vitokng", "vitokng.club"}, {"Wtcn", "wtcn.club"}, {"Imorr", "imorr.club"},
+            {"Skinwin", "skinwin.club"}, {"Maherco", "maherco.club"}, {"Elfanta", "elfanta.club"},
             {"Anomaly", "anomaly.club"}, {"Blarg", "blarg.club"}, {"Bomman", "bomman.club"},
             {"bysTaXx", "bystaxx.club"}, {"DEVNGUYEN", "devnguyen.club"}, {"DrewCS2", "drewcs2.club"}, {"DrewUnboxing", "drewunboxing.club"},
             {"ErycTriceps", "eryctriceps.club"}, {"HaiX", "haix.club"}, {"Jon Sandman", "jonsandman.club"},
@@ -41,14 +49,7 @@ namespace SkinClubGiveawayDesktop
             {"Karrigan", "karrigan.club"}, {"Theasylum", "theasylum.club"}
         };
 
-        private static readonly Dictionary<string, string> CreatorDomains = MergeCreators();
-
-        private static Dictionary<string, string> MergeCreators()
-        {
-            Dictionary<string, string> all = new Dictionary<string, string>(BuiltInCreators, StringComparer.OrdinalIgnoreCase);
-            foreach (KeyValuePair<string, string> extra in AppSettings.Current.ExtraCreators) all[extra.Key] = extra.Value;
-            return all;
-        }
+        private static readonly Dictionary<string, string> CreatorDomains = BuiltInCreators;
 
         private static readonly Dictionary<string, string> DomainCreators = BuildDomainCreators();
 
@@ -70,18 +71,34 @@ namespace SkinClubGiveawayDesktop
         // Status parsing is anchored to the giveaway's own ticket/deadline fields.
         // Generic END/FIN words elsewhere on the page (FAQ, footer, old results,
         // scripts, etc.) must never move a live giveaway into History.
+        // Ticket labels seen on creator pages (English, Spanish, Portuguese, Vietnamese, Arabic, Turkish)
+        // plus a few likely translations. Pages in any other language fall back to TicketGenericRegex.
+        private const string TicketLabels =
+            @"tickets?\s*(?:left|remaining|restantes)?|tickets?\s+disponibles|bilhetes?\s+(?:restantes|dispon[ií]veis)|" +
+            @"v[eé]\s*(?:c[oò]n\s+l[aạ]i|con\s+lai)|التذاكر\s+المتبقية|kalan\s+bilet(?:ler)?|bilet(?:ler)?\s+kalan|" +
+            @"billets?\s+restants|verbleibende\s+tickets|biglietti\s+rimanenti|pozosta[łl]e\s+bilety|осталось\s+билетов|билет(?:ов|ы)?\s+осталось";
         private static readonly Regex TicketLineRegex = new Regex(
-            @"^[ \t]*(?:tickets?[ \t]*(?:left|remaining|restantes)?|tickets?[ \t]+disponibles|bilhetes?[ \t]+(?:restantes|dispon[ií]veis)|v[eé][ \t]*(?:c[oò]n[ \t]+l[aạ]i|con[ \t]+lai))[ \t]*[:\-]?[ \t]*([\d.,]+)[ \t]*/[ \t]*([\d.,]+)[ \t]*$",
+            @"^[ \t]*(?:" + TicketLabels.Replace(@"\s", @"[ \t]") + @")[ \t]*[:\-]?[ \t]*([\d.,]+)[ \t]*/[ \t]*([\d.,]+)[ \t]*$",
             RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
         private static readonly Regex TicketFallbackRegex = new Regex(
-            @"(?:tickets?\s*(?:left|remaining|restantes)?|tickets?\s+disponibles|bilhetes?\s+(?:restantes|dispon[ií]veis)|v[eé]\s*(?:c[oò]n\s+l[aạ]i|con\s+lai))\s*[:\-]?\s*([\d.,]+)\s*/\s*([\d.,]+)",
+            @"(?:" + TicketLabels + @")\s*[:\-]?\s*([\d.,]+)\s*/\s*([\d.,]+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        // Any language: a line that is just "<label>: 974 / 1000". Prize lines never have this shape.
+        private static readonly Regex TicketGenericRegex = new Regex(
+            @"^[ \t]*[^\d\r\n:/$€£]{3,40}:[ \t]*([\d.,]+)[ \t]*/[ \t]*([\d.,]+)[ \t]*$",
+            RegexOptions.Multiline | RegexOptions.Compiled);
+        // Every current creator page carries its exact end in the HTML, whatever its language:
+        // <b class="giveaway-timecomplete" data-giveaway-complete-date="13.11.2026" data-giveaway-complete-time="23:59">
+        // The visible countdown is filled from this by JavaScript, so no browser is needed to read it.
+        private static readonly Regex CompleteDateRegex = new Regex(
+            @"data-giveaway-complete-date\s*=\s*[""']\s*(\d{1,2})[./-](\d{1,2})[./-](\d{4})\s*[""']",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex DeadlineLineRegex = new Regex(
             @"^[ \t]*(?:time[ \t]+to[ \t]+completion|time[ \t]+remaining|tiempo[ \t]+restante|tempo[ \t]+restante|th(?:ờ|o)i[ \t]+gian[ \t]+c(?:ò|o)n[ \t]+l(?:ạ|a)i|deadline|ends?[ \t]+in|ending[ \t]+in)[ \t]*[:\-]?[ \t]*([^
 |]{0,80})[ \t]*$",
             RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
         private static readonly Regex ExactEndedValueRegex = new Regex(
-            @"^\s*(?:end|ended|fin|fim|finished|k[eế]t\s*th[uú]c|ket\s*thuc|cerrado|cerrada|terminado|terminada|finalizado|finalizada|encerrado|encerrada|acabou|conclu[ií]do|conclu[ií]da|termin[eé]e?|beendet|ende|bitti|zako[nń]czon[ey]|завершен[оа]?|завершён|окончен[оа]?|конец)\s*[.!]*\s*$",
+            @"^\s*(?:end|ended|fin|fim|finished|k[eế]t\s*th[uú]c|ket\s*thuc|cerrado|cerrada|terminado|terminada|finalizado|finalizada|encerrado|encerrada|acabou|conclu[ií]do|conclu[ií]da|termin[eé]e?|beendet|ende|bitti|[bB][iİıI][tT][iİıI][sşSŞ]|sona\s+erdi|zako[nń]czon[ey]|завершен[оа]?|завершён|окончен[оа]?|конец|النهاية|انتهى|انتهت|منتهي)\s*[.!]*\s*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex CountdownUnitRegex = new Regex(
             @"(\d+(?:[.,]\d+)?)\s*(days?|d[ií]as?|dias?|d|hours?|hrs?|horas?|h|minutes?|mins?|minutos?|m|seconds?|secs?|segundos?|s)\b",
@@ -138,6 +155,11 @@ namespace SkinClubGiveawayDesktop
         // and the render cache is bypassed. Automatic refreshes leave it off and re-read on a schedule.
         public static volatile bool RecheckDeadlines;
 
+        // Set while the Refresh button runs: a quick look at the saved pages only (tickets left, deadline,
+        // ended or not), read from the page itself. No browser is opened, so it takes seconds; a missing
+        // promocode or deposit is left for Deep Search and the automatic checks to fill in.
+        public static volatile bool QuickRefresh;
+
         // Background (automatic) renders use at most two browsers so a periodic re-check never spikes
         // memory; a user-started scan may use all of them.
         private static readonly SemaphoreSlim BackgroundRenderGate = new SemaphoreSlim(2, 2);
@@ -151,6 +173,23 @@ namespace SkinClubGiveawayDesktop
             if (!activePage || deadlineFromPage) return false;
             if (!haveCarriedDeadline) return !recentlyRendered || forceRecheck;
             return forceRecheck || !lastRenderedAtUtc.HasValue || nowUtc - lastRenderedAtUtc.Value > recheckAfter;
+        }
+
+        // Whether the automatic timer should run a Deep Search (which finds new giveaways) instead of
+        // a Refresh (which only re-checks saved ones). Due when the last completed Deep Search is older
+        // than the interval or never happened. A failed attempt also waits a full interval, so an
+        // offline PC or a rate-limited search site is not hit again on every timer tick.
+        internal static bool AutoDeepSearchDue(string lastDeepScanIso, DateTime? lastAttemptUtc, int intervalMinutes, DateTime nowUtc)
+        {
+            if (intervalMinutes <= 0) return false;
+            TimeSpan interval = TimeSpan.FromMinutes(intervalMinutes);
+            if (lastAttemptUtc.HasValue && nowUtc - lastAttemptUtc.Value < interval) return false;
+            DateTime last;
+            if (string.IsNullOrWhiteSpace(lastDeepScanIso) ||
+                !DateTime.TryParse(lastDeepScanIso, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out last))
+                return true;
+            return nowUtc - last.ToUniversalTime() >= interval;
         }
 
         // What the scanner is doing right now, for the Logs tab ("Idle" when nothing runs).

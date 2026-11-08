@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.0.0] - 2026-11-08
+
+- New look in the SkinClub style: deep indigo background with pink and electric-blue glows and faint 3D gifts, coins, cash, gems and knives behind the whole window (including the table); angular cut-corner buttons with the pink-to-red primary gradient; a stats strip (active giveaways and tickets left, ending within 48 hours, joined, cheapest entry); creator tiles, neon ticket bars, promo chips, gold coin deposits and "in N days" under each deadline; restyled Settings and Add links dialogs.
+- 3D icons, embedded in the exe. New app icon and header: a 3D gift on a dark tile, "SkinClub GW Finder" with the version beside it.
+- Text uses Segoe UI and Consolas, which Windows draws sharply (variable fonts such as Bahnschrift come out with uneven edges).
+- Smoother window: resizing by dragging an edge no longer stutters (layout waits while the edge moves and catches up when the mouse rests or is released; about 9 ms per mouse move instead of about 180 ms), the background art is drawn once at screen size and re-laid out off the UI thread after a resize, and buttons, tiles and panels keep their finished picture instead of redrawing gradients and icons on every repaint (a full repaint dropped from about 48 ms to 18 ms; maximising from about 160 ms to 55 ms).
+- Columns are sized so creator names, links and entry codes are shown in full, down to the smallest window size; long values step down a font size instead of being cut off.
+
+- Fixed: giveaway pages in Spanish, Portuguese, Turkish and Arabic were often saved as "unknown", got the discount code instead of the entry code, or had no minimum deposit. The end date is now read from the page's own data (`data-giveaway-complete-date`), which every page carries in every language, so no browser is needed for it; ticket labels in more languages are recognised, plus any "label: 12 / 50" line in other languages; the entry code is the one ending with the giveaway's date.
+- 15 more creators are built in (Peereira, Neok, Lekoen, Lukinhas, Garmour, Pinkdrive, BrunoCS2, TACO, Paulinhoeletric, Vitokng, Wtcn, Imorr, Skinwin, Maherco, Elfanta). Every creator domain that is saved is probed as well, and Deep Search also probes next month's dates.
+- Refresh is now a quick check: tickets, deadline and ended status of the saved giveaways, without opening a browser.
+- Add links: paste many giveaway links at once, one per line.
+- Minimum deposits are shown in one USD form, for example `5$` (no more `US$5` / `$5` mix). Saved values are converted on start-up.
+- The browser is chosen automatically (Edge first, then Chrome, Brave, Chromium); the browser field, "Open settings.json" and the `BrowserPath` / `ExtraCreators` options were removed from Settings.
+
+- Fixed: automatic refreshes only re-checked giveaways that were already saved, so new giveaways were found only when you pressed Deep Search and the "new giveaway" notification almost never appeared. The app now also runs a Deep Search automatically every 60 minutes (set in Settings; minimum 15, 0 turns it off). Start-up itself only refreshes the saved giveaways; the first automatic Deep Search comes on a later timer tick. An automatic Deep Search uses at most two browsers, shows no error pop-ups, waits a full interval before retrying after a failure, and sends the tray notification for new finds.
+- Settings: the refresh field is now labelled "Recheck saved giveaways every", next to the new "Search for new giveaways every" field.
+
 ## [1.5.3] - 2026-10-30
 
 - Fixed: a giveaway's deadline was never updated once it had been saved, so an extended giveaway kept its old date. The live timer is now read again whenever you press Refresh or Deep Search, and on automatic refreshes when the saved deadline is older than 30 minutes (`DeadlineRecheckMinutes` in `settings.json`). Automatic re-checks use at most two browsers at a time.

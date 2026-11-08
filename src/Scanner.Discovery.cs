@@ -48,8 +48,10 @@ namespace SkinClubGiveawayDesktop
             HashSet<string> slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string slug in RecentDateSlugs(8)) slugs.Add(slug);
 
+            // Creator giveaways are dated the 1st or 2nd of a month (011026, 021026, 011126, ...).
+            // Next month is included too: a giveaway page can go up a few days before its date.
             DateTime today = DateTime.Now.Date;
-            for (int monthOffset = 0; monthOffset <= 2; monthOffset++)
+            for (int monthOffset = -1; monthOffset <= 2; monthOffset++)
             {
                 DateTime month = new DateTime(today.AddMonths(-monthOffset).Year, today.AddMonths(-monthOffset).Month, 1);
                 for (int day = 1; day <= 2; day++)
@@ -375,6 +377,11 @@ namespace SkinClubGiveawayDesktop
 
                 enqueue(saved);
                 enqueue(GeneratedCandidates());
+                // Every creator domain already saved (for example one added by hand) is probed for its
+                // other dated giveaways right away, not only after the slow searches finish.
+                List<Candidate> savedDomainProbes = new List<Candidate>(saved);
+                AddDiscoveredDomainProbes(savedDomainProbes);
+                enqueue(savedDomainProbes);
 
                 List<Candidate> discovered = new List<Candidate>();
                 discovered.AddRange(await telegram);
@@ -444,6 +451,48 @@ namespace SkinClubGiveawayDesktop
             phase = "Checking the added link";
             try { return await ValidateAsync(new Candidate(creator, url, "manual"), throttle); }
             finally { phase = "Idle"; }
+        }
+
+        // Splits pasted text (one link per line, or separated by spaces, commas or semicolons) into
+        // giveaway links. Each piece must be one whole dated creator link, exactly as ValidateOneAsync
+        // requires, so nothing else from the text can reach a browser's command line. Duplicates are
+        // dropped; pieces that are not giveaway links are returned in rejected.
+        internal static List<string> ParseLinkList(string text, out List<string> rejected)
+        {
+            List<string> links = new List<string>();
+            rejected = new List<string>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string piece in (text ?? "").Split(new[] { ' ', '\t', '\r', '\n', ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string token = piece.Trim().Trim('<', '>', '"', '\'', '(', ')', '[', ']');
+                if (token.Length == 0) continue;
+                Match whole = DirectUrlRegex.Match(token);
+                if (!whole.Success || whole.Index != 0 || whole.Length != token.Length) { rejected.Add(piece.Trim()); continue; }
+                string url = CleanDiscoveredUrl(whole.Value);
+                if (seen.Add(GiveawayKey(url))) links.Add(url);
+            }
+            return links;
+        }
+
+        // Checks several added links at once (a few at a time per site, see FetchPageAsync).
+        public static async Task<GiveawayItem[]> ValidateManyAsync(IList<string> urls)
+        {
+            SemaphoreSlim throttle = new SemaphoreSlim(8, 8);
+            ResetChecks(urls.Count);
+            phase = "Checking the added links";
+            try
+            {
+                List<Task<GiveawayItem>> checks = new List<Task<GiveawayItem>>();
+                foreach (string url in urls) checks.Add(ValidateAsync(new Candidate(null, url, "manual"), throttle));
+                return await Task.WhenAll(checks);
+            }
+            finally { phase = "Idle"; }
+        }
+
+        public static void MergeMany(AppData data, IEnumerable<GiveawayItem> items)
+        {
+            MergeItems(data, items);
+            DataStore.Save(data);
         }
 
         public static void MergeOne(AppData data, GiveawayItem item)

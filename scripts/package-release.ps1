@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = Split-Path $PSScriptRoot -Parent
-$version = '1.5.3'
+$version = '2.0.0'
 $tag = 'v' + $version
 $output = Join-Path $repo ('dist/' + $tag)
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('SkinClub-release-' + [Guid]::NewGuid().ToString('N'))
@@ -32,6 +32,8 @@ try {
     foreach ($name in @('README.md', 'CHANGELOG.md', 'VERSION.txt', 'SkinClubGWFinder.ico', 'run.bat')) {
         Copy-Item -LiteralPath (Join-Path $source $name) -Destination $portable
     }
+    # The 3D icons (Microsoft Fluent Emoji, MIT) are embedded in the exe; their license ships with it.
+    Copy-Item -LiteralPath (Join-Path $source 'assets/icons/LICENSE-fluentui-emoji.txt') -Destination (Join-Path $portable 'THIRD-PARTY-NOTICES.txt')
     Copy-Item -LiteralPath (Join-Path $source "releases/$tag.md") -Destination (Join-Path $output 'RELEASE_NOTES.md') -Force
     Copy-Item -LiteralPath $exe -Destination (Join-Path $output 'SkinClubGWFinder.exe') -Force
     $assets = @('SkinClubGWFinder.exe', "SkinClub-GW-Finder-$tag-Windows.zip", "SkinClub-GW-Finder-$tag-Source.zip")
@@ -46,24 +48,24 @@ try {
     }
     $sums | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding ascii
     @'
-# Upload v1.5.3 to GitHub
+# Upload v2.0.0 to GitHub
 
 Nothing has been published, pushed, or tagged by the packaging script.
 
 1. Commit and push the release changes to your repository first. Include the src/ folder,
    scripts/build.ps1, VERSION.txt, README.md, CHANGELOG.md,
-   releases/v1.5.3.md, scripts/package-release.ps1, .gitignore, and any other pending
+   releases/v2.0.0.md, scripts/package-release.ps1, .gitignore, and any other pending
    source/build/test changes. Do not commit dist/.
    If you use the source ZIP to update the repository, extract its CONTENTS into the
    repository root; do not upload the ZIP itself as a substitute for updating source.
 2. Open https://github.com/Smokianlord/SkinClub-GW-Finder/releases/new
-3. Create tag: v1.5.3. Target the commit containing the release changes from step 1.
-4. Release title: SkinClub GW Finder v1.5.3
+3. Create tag: v2.0.0. Target the commit containing the release changes from step 1.
+4. Release title: SkinClub GW Finder v2.0.0
 5. Paste the contents of RELEASE_NOTES.md into the description.
 6. Attach these four files from this folder:
-   - SkinClub-GW-Finder-v1.5.3-Windows.zip (recommended download)
+   - SkinClub-GW-Finder-v2.0.0-Windows.zip (recommended download)
    - SkinClubGWFinder.exe (standalone executable)
-   - SkinClub-GW-Finder-v1.5.3-Source.zip (complete source snapshot)
+   - SkinClub-GW-Finder-v2.0.0-Source.zip (complete source snapshot)
    - SHA256SUMS.txt
 7. Set as the latest release, leave pre-release unchecked, and publish when ready.
 
@@ -77,7 +79,7 @@ This is why committing and pushing the matching source before creating the tag m
     $archive = [IO.Compression.ZipFile]::OpenRead((Join-Path $output $assets[2]))
     try {
         $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-        foreach ($required in @('src/Program.cs', 'src/BrowserRuntime.cs', 'scripts/build.ps1', 'BUILD_EXE.bat', '.github/workflows/build.yml', 'tests/run.ps1', 'scripts/package-release.ps1', 'releases/v1.5.3.md')) {
+        foreach ($required in @('src/Program.cs', 'src/BrowserRuntime.cs', 'scripts/build.ps1', 'BUILD_EXE.bat', '.github/workflows/build.yml', 'tests/run.ps1', 'scripts/package-release.ps1', 'releases/v2.0.0.md', 'assets/icons/LICENSE-fluentui-emoji.txt', 'assets/icons/wrapped_gift.png')) {
             if ($entries -notcontains $required) { throw "Missing source archive entry: $required" }
         }
         if (@($entries | Where-Object { $_ -match '(^|/)data\.json|\.exe$|(^|/)\.git/' }).Count -gt 0) { throw 'Unexpected private or binary source entry' }
