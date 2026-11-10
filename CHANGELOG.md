@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.0] - 2026-11-10
+
+- New **Prize Pool** column: each giveaway's total prize value in USD (for example `1,000$`), read from the page in any language. It sorts by amount and can be searched. Saved giveaways, including ended ones, get their prize pool filled in on the next Refresh or Deep Search.
+- The window's minimum width is 1290 px so every column, names, links and codes stay fully visible.
+
 ## [2.0.0] - 2026-11-08
 
 - New look in the SkinClub style: deep indigo background with pink and electric-blue glows and faint 3D gifts, coins, cash, gems and knives behind the whole window (including the table); angular cut-corner buttons with the pink-to-red primary gradient; a stats strip (active giveaways and tickets left, ending within 48 hours, joined, cheapest entry); creator tiles, neon ticket bars, promo chips, gold coin deposits and "in N days" under each deadline; restyled Settings and Add links dialogs.

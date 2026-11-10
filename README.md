@@ -14,14 +14,14 @@ A Windows desktop app that finds SkinClub creator giveaways, checks each one, an
 
 ### Reading each giveaway
 - **Works in any language:** English, Spanish, Portuguese, Turkish, Arabic and others.
-- **Shows what matters:** tickets left out of the total, the entry promocode, the minimum deposit (always in USD, for example `5$`) and the deadline with how many days are left.
+- **Shows what matters:** the total prize pool, tickets left out of the total, the entry promocode, the minimum deposit (always in USD, for example `5$`) and the deadline with how many days are left.
 - **Every page is checked** before it is added, and pages that do not answer are tried again instead of being skipped.
 
 ### Keeping them organised
 - **Active, Joined and History tabs.** Press **+** to move a giveaway to Joined; press **×** there to send it back.
 - **History** keeps ended giveaways, newest first, with their promocode and deposit.
 - **Stats strip:** active giveaways and tickets left, giveaways ending within 48 hours, joined giveaways, and the cheapest entry.
-- **Sort** any column and **search** by creator, link, tickets, promocode, deposit or deadline (Ctrl+F).
+- **Sort** any column (prize pools and deposits by amount) and **search** by creator, link, prize pool, tickets, promocode, deposit or deadline (Ctrl+F).
 - **One click** opens a giveaway or copies its link or promocode.
 
 ### Everyday use

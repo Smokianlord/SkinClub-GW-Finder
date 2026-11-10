@@ -428,6 +428,7 @@ namespace SkinClubGiveawayDesktop
                     if (u.Status == "active" || u.Status == "ended" || known.Contains(key)) useful.Add(u);
                 }
                 MergeItems(data, useful);
+                await FillMissingPrizePoolsAsync(data);
                 data.LastScan = DateTime.UtcNow.ToString("o");
                 data.LastDeepScan = data.LastScan;
                 DataStore.Save(data);

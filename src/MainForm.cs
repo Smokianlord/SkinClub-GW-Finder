@@ -96,9 +96,10 @@ namespace SkinClubGiveawayDesktop
         internal MainForm(AppData initialData, bool automaticRefresh)
         {
             Text = Program.DisplayTitle;
-            Width = 1240;
+            Width = 1320;
             Height = 800;
-            MinimumSize = new Size(1180, 720);
+            // Wide enough to show every column, including Prize Pool, with names, links and codes in full.
+            MinimumSize = new Size(1290, 720);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Bg;
             ForeColor = TextColor;
@@ -475,7 +476,7 @@ namespace SkinClubGiveawayDesktop
             filterFieldBox = new UiPicker();
             filterFieldBox.Anchor = AnchorStyles.Left | AnchorStyles.Right;
             filterFieldBox.Margin = new Padding(0, 0, 10, 0);
-            filterFieldBox.Items.AddRange(new object[] { "Creator name", "All fields", "URL", "Ticket", "Promocode", "Minimum deposit", "Deadline" });
+            filterFieldBox.Items.AddRange(new object[] { "Creator name", "All fields", "URL", "Prize pool", "Ticket", "Promocode", "Minimum deposit", "Deadline" });
             filterFieldBox.SelectedIndex = 0;
             filterFieldBox.SelectedIndexChanged += delegate { if (grid != null) Render(); };
             filterPanel.Controls.Add(filterFieldBox, 0, 0);
@@ -637,6 +638,12 @@ namespace SkinClubGiveawayDesktop
             link.MinimumWidth = 120;
             link.SortMode = DataGridViewColumnSortMode.Programmatic;
 
+            DataGridViewTextBoxColumn prizePool = new DataGridViewTextBoxColumn();
+            prizePool.Name = "PrizePool";
+            prizePool.HeaderText = "PRIZE POOL";
+            prizePool.Width = 116;
+            prizePool.SortMode = DataGridViewColumnSortMode.Programmatic;
+
             DataGridViewTextBoxColumn ticket = new DataGridViewTextBoxColumn();
             ticket.Name = "Ticket";
             ticket.HeaderText = "TICKETS";
@@ -663,7 +670,7 @@ namespace SkinClubGiveawayDesktop
 
             DataGridViewButtonColumn joinedAction = MakeIconColumn("JoinedAction", 52);
 
-            grid.Columns.AddRange(new DataGridViewColumn[] { creator, link, ticket, promo, minimumDeposit, deadline, joinedAction });
+            grid.Columns.AddRange(new DataGridViewColumn[] { creator, link, prizePool, ticket, promo, minimumDeposit, deadline, joinedAction });
             grid.CellMouseClick += GridCellMouseClick;
             grid.CellPainting += GridCellPainting;
             grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
@@ -1038,6 +1045,15 @@ namespace SkinClubGiveawayDesktop
                         DrawCopyIcon(g, CopyButtonRect(cb), rowHot && hoverColumn == e.ColumnIndex && hoverOnCopy, rowHot);
                         break;
                     }
+                case "PrizePool":
+                    {
+                        if (missing) { TextRenderer.DrawText(g, "–", cellFont, text, Ui.Muted, Ui.Single); break; }
+                        // A trophy, then the total prize value.
+                        Icons.DrawCentered(g, Icons.Trophy, text.X + 11, cb.Y + (cb.Height - 1) / 2f, 22);
+                        TextRenderer.DrawText(g, value, numberFont, new Rectangle(text.X + 28, text.Y, Math.Max(1, text.Width - 28), text.Height),
+                            ended ? Ui.Muted : Color.FromArgb(255, 150, 226), Ui.Single);
+                        break;
+                    }
                 case "MinimumDeposit":
                     {
                         if (missing) { TextRenderer.DrawText(g, "–", cellFont, text, Ui.Muted, Ui.Single); break; }
@@ -1308,6 +1324,7 @@ namespace SkinClubGiveawayDesktop
                 else if (string.Equals(field, "Ticket", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.Ticket; };
                 else if (string.Equals(field, "Promocode", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.PromoCode; };
                 else if (string.Equals(field, "Minimum deposit", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.MinimumDeposit; };
+                else if (string.Equals(field, "Prize pool", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.PrizePool; };
                 else if (string.Equals(field, "Deadline", StringComparison.OrdinalIgnoreCase)) selector = delegate(GiveawayItem i) { return i.Deadline; };
 
                 list.RemoveAll(delegate(GiveawayItem i)
@@ -1318,6 +1335,7 @@ namespace SkinClubGiveawayDesktop
                              (i.Ticket ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
                              (i.PromoCode ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
                              (i.MinimumDeposit ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (i.PrizePool ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
                              (i.Deadline ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
                 });
             }
@@ -1355,6 +1373,15 @@ namespace SkinClubGiveawayDesktop
                 bool bh = TryDeadlineDate(b, out bd);
                 if (ah != bh) return ah ? -1 : 1;
                 if (ah && bh) cmp = ad.CompareTo(bd);
+            }
+            else if (string.Equals(sortColumn, "PrizePool", StringComparison.OrdinalIgnoreCase))
+            {
+                // By amount (500$ before 1,000$); giveaways without a known prize pool stay at the bottom.
+                decimal av, bv;
+                bool ah = Scanner.TryUsdValue(a.PrizePool, out av);
+                bool bh = Scanner.TryUsdValue(b.PrizePool, out bv);
+                if (ah != bh) return ah ? -1 : 1;
+                if (ah && bh) cmp = av.CompareTo(bv);
             }
             else if (string.Equals(sortColumn, "PromoCode", StringComparison.OrdinalIgnoreCase))
             {
@@ -1477,7 +1504,6 @@ namespace SkinClubGiveawayDesktop
             tab.Badge = count.ToString();
         }
         // Column positions, matching the order columns are added in BuildUi().
-        private const int ColTicket = 2, ColPromo = 3, ColDeposit = 4, ColDeadline = 5, ColAction = 6;
 
         private void Render()
         {
@@ -1617,7 +1643,8 @@ namespace SkinClubGiveawayDesktop
                 string promoCode = string.IsNullOrWhiteSpace(i.PromoCode) ? "-" : i.PromoCode;
                 string minimumDeposit = string.IsNullOrWhiteSpace(i.MinimumDeposit) ? "-" : i.MinimumDeposit;
                 DataGridViewRow gridRow = new DataGridViewRow();
-                gridRow.CreateCells(grid, i.Creator ?? "Unknown", i.Url ?? "", i.Ticket ?? "-", promoCode, minimumDeposit, deadline, "");
+                string prize = string.IsNullOrWhiteSpace(i.PrizePool) ? "-" : i.PrizePool;
+                gridRow.CreateCells(grid, i.Creator ?? "Unknown", i.Url ?? "", prize, i.Ticket ?? "-", promoCode, minimumDeposit, deadline, "");
                 gridRow.Tag = i;
                 gridRow.Height = 56;
 
@@ -1707,7 +1734,7 @@ namespace SkinClubGiveawayDesktop
                     clone.Items.Add(new GiveawayItem
                     {
                         Creator = i.Creator, Url = i.Url, Status = i.Status, Ticket = i.Ticket, PromoCode = i.PromoCode,
-                        MinimumDeposit = i.MinimumDeposit, Deadline = i.Deadline, LastChecked = i.LastChecked, Source = i.Source,
+                        MinimumDeposit = i.MinimumDeposit, PrizePool = i.PrizePool, Deadline = i.Deadline, LastChecked = i.LastChecked, Source = i.Source,
                         Error = i.Error, Joined = i.Joined, JoinedAt = i.JoinedAt, HistorySince = i.HistorySince, RenderedAt = i.RenderedAt
                     });
                 }

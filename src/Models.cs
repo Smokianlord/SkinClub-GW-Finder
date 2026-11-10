@@ -28,6 +28,8 @@ namespace SkinClubGiveawayDesktop
         public string Ticket { get; set; }
         public string PromoCode { get; set; }
         public string MinimumDeposit { get; set; }
+        // Total value of the giveaway's prizes in USD, for example "1,000$"; "-" or empty when unknown.
+        public string PrizePool { get; set; }
         public string Deadline { get; set; }
         public string LastChecked { get; set; }
         public string Source { get; set; }
@@ -73,6 +75,7 @@ namespace SkinClubGiveawayDesktop
         public string Ticket;
         public string PromoCode;
         public string MinimumDeposit;
+        public string PrizePool;
         public string Deadline;
         public int? Remaining;
         public int? Total;

@@ -221,6 +221,23 @@ static class RegressionTests
         Check(Scanner.TryCompleteDate("data-giveaway-complete-date=\"" + DateTime.Now.ToString("dd.MM.yyyy", inv) + "\"", DateTime.Now.Date, out todayDeadline, out todayEnded) && !todayEnded,
             "A giveaway ending today is still active today");
 
+        // Prize pools are read from the page in any language and shown as USD with thousands grouped.
+        Func<string, string, string> poolPage = delegate(string label, string amount)
+        {
+            return "<html><body><div class=\"prize\"><p class=\"red-label red-label_small\">" + label + "</p>\n  <p class=\"red-label\">" + amount + "</p></div><p>1st place: AK-47</p></body></html>";
+        };
+        Check(Scanner.PrizePoolFromHtml(poolPage("total prize pool", "$500")) == "500$" &&
+              Scanner.PrizePoolFromHtml(poolPage("pool total de premios", "$1,000")) == "1,000$" &&
+              Scanner.PrizePoolFromHtml(poolPage("toplam ödül havuzu", "$1,000")) == "1,000$" &&
+              Scanner.PrizePoolFromHtml(poolPage("إجمالي قيمة الجوائز", "$2,000")) == "2,000$" &&
+              Scanner.ParsePage(poolPage("total prize pool", "$3,000")).PrizePool == "3,000$",
+            "Prize pool is read in English, Spanish, Turkish and Arabic");
+        Check(Scanner.PrizePoolFromHtml("<html><body>Total prize pool: $750</body></html>") == "750$" &&
+              Scanner.PrizePoolFromHtml("<html><body>Tickets left: 5 / 10</body></html>") == "-", "Prize pool falls back to the page text, and is blank when absent");
+        decimal thousand, cents;
+        Check(Scanner.TryUsdValue("1,000$", out thousand) && thousand == 1000m && Scanner.TryUsdValue("7.50$", out cents) && cents == 7.5m &&
+              !Scanner.TryUsdValue("-", out cents), "Amounts like 1,000$ are read back as numbers for sorting");
+
         // Deposits are shown as USD in one form: "2$".
         Check(Scanner.UsdAmount("US$2") == "2$" && Scanner.UsdAmount("US$$2") == "2$" && Scanner.UsdAmount("$10") == "10$" &&
               Scanner.UsdAmount("5 USD") == "5$" && Scanner.UsdAmount("7,50 $") == "7.50$" && Scanner.UsdAmount("15 USDT") == "15$" &&
@@ -344,20 +361,26 @@ static class RegressionTests
             Application.DoEvents();
             DataGridView grid = (DataGridView)Field(form, "grid");
             Check(grid.Rows.Count == 2, "Active excludes joined entries");
-            Call(form, "GridCellMouseClick", grid, new DataGridViewCellMouseEventArgs(6, 0, 4, 4, new MouseEventArgs(MouseButtons.Right, 1, 4, 4, 0)));
+            int joinCol = grid.Columns["JoinedAction"].Index, ticketCol = grid.Columns["Ticket"].Index, prizeCol = grid.Columns["PrizePool"].Index;
+            Call(form, "GridCellMouseClick", grid, new DataGridViewCellMouseEventArgs(joinCol, 0, 4, 4, new MouseEventArgs(MouseButtons.Right, 1, 4, 4, 0)));
             Check(!data.Items[0].Joined, "Right click does not join a giveaway");
             grid.CurrentCell = grid.Rows[1].Cells[0];
             Call(form, "Render");
             Check(((GiveawayItem)grid.CurrentRow.Tag).Creator == "Beta", "Rendering preserves selected giveaway");
-            Call(form, "GridColumnHeaderMouseClick", grid, new DataGridViewCellMouseEventArgs(2, -1, 0, 0, new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)));
+            Call(form, "GridColumnHeaderMouseClick", grid, new DataGridViewCellMouseEventArgs(ticketCol, -1, 0, 0, new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)));
             Check(((GiveawayItem)grid.Rows[0].Tag).Creator == "Beta", "Tickets sort numerically");
+            // Prize pools sort by amount: 500$ before 1,000$, unknown last.
+            data.Items[0].PrizePool = "1,000$"; data.Items[1].PrizePool = "500$";
+            Call(form, "GridColumnHeaderMouseClick", grid, new DataGridViewCellMouseEventArgs(prizeCol, -1, 0, 0, new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)));
+            Check(((GiveawayItem)grid.Rows[0].Tag).Creator == "Beta" && ((GiveawayItem)grid.Rows[1].Tag).Creator == "Alpha" &&
+                  Convert.ToString(grid.Rows[0].Cells["PrizePool"].Value) == "500$", "Prize pool column shows and sorts by amount");
             ((TextBox)Field(form, "filterBox")).Text = "missing";
             Call(form, "Render");
             Check(grid.Rows.Count == 0, "Unmatched search produces empty view");
             ((TextBox)Field(form, "filterBox")).Clear();
             ((Button)Field(form, "joinedButton")).PerformClick();
             Check(grid.Rows.Count == 1 && ((GiveawayItem)grid.Rows[0].Tag).Joined, "Joined view is exclusive");
-            Call(form, "GridCellMouseClick", grid, new DataGridViewCellMouseEventArgs(6, 0, 4, 4, new MouseEventArgs(MouseButtons.Left, 1, 4, 4, 0)));
+            Call(form, "GridCellMouseClick", grid, new DataGridViewCellMouseEventArgs(joinCol, 0, 4, 4, new MouseEventArgs(MouseButtons.Left, 1, 4, 4, 0)));
             ((Button)Field(form, "historyButton")).PerformClick();
             Check(grid.Rows.Count == 1, "Leaving Joined restores history when below the cap");
             ((Button)Field(form, "historyButton")).PerformClick();
@@ -368,7 +391,8 @@ static class RegressionTests
             Application.DoEvents();
             Button add = (Button)Field(form, "addButton");
             Check(add.Left >= 0 && add.Right <= add.Parent.ClientSize.Width, "All header actions fit at minimum size");
-            Check(grid.GetCellDisplayRectangle(6, 0, false).Right <= grid.ClientSize.Width, "Row actions fit without horizontal scrolling at minimum size");
+            Check(grid.GetCellDisplayRectangle(joinCol, 0, false).Right <= grid.ClientSize.Width && grid.GetCellDisplayRectangle(joinCol, 0, false).Width > 0,
+                "Row actions fit without horizontal scrolling at minimum size");
             // The longest real creator name and entry code fit in full (no "...") at the minimum size.
             int nameRoom = grid.Columns["Creator"].Width - 16 - 32 - 12 - 8;
             int codeRoom = grid.Columns["PromoCode"].Width - 16 - 52 - 22;
@@ -422,7 +446,7 @@ static class RegressionTests
             Check(names() == "Abe,Live", "Leaving History restores the Active sort");
             ((Button)Field(orderForm, "historyButton")).PerformClick();
             Check(names() == "Zed,Max,Amy", "Returning to History keeps newest-ended first");
-            Call(orderForm, "GridColumnHeaderMouseClick", orderGrid, new DataGridViewCellMouseEventArgs(5, -1, 0, 0, new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)));
+            Call(orderForm, "GridColumnHeaderMouseClick", orderGrid, new DataGridViewCellMouseEventArgs(orderGrid.Columns["Deadline"].Index, -1, 0, 0, new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)));
             Check(names() == "Amy,Max,Zed", "Clicking the History deadline header reverses the order");
         }
 

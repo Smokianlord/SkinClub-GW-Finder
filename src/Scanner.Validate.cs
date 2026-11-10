@@ -31,7 +31,7 @@ namespace SkinClubGiveawayDesktop
                 ActivityLog.Write("CHECK", c.Url);
                 GiveawayItem item = new GiveawayItem
                 {
-                    Creator = InferCreator(c.Url, c.Creator), Url = CleanDiscoveredUrl(c.Url), Status = "unknown", Ticket = "-", PromoCode = "-", MinimumDeposit = "-", Deadline = "-",
+                    Creator = InferCreator(c.Url, c.Creator), Url = CleanDiscoveredUrl(c.Url), Status = "unknown", Ticket = "-", PromoCode = "-", MinimumDeposit = "-", PrizePool = "-", Deadline = "-",
                     LastChecked = DateTime.UtcNow.ToString("o"), Source = c.Source, Error = null
                 };
                 try
@@ -61,6 +61,7 @@ namespace SkinClubGiveawayDesktop
                     item.PromoCode = GiveawayInfo.EntryCodeOrDash(p.PromoCode, item.Url);
                     item.MinimumDeposit = (p.PromoCode != "-" && item.PromoCode == "-") ? "-" : p.MinimumDeposit;
                     item.Deadline = p.Deadline;
+                    item.PrizePool = p.PrizePool;
                     bool deadlineFromPage = item.Deadline != "-";
 
                     // Current SkinClub creator pages can inject the hour countdown only
@@ -97,6 +98,8 @@ namespace SkinClubGiveawayDesktop
                             item.PromoCode = prior.PromoCode;
                         if (item.MinimumDeposit == "-" && !string.IsNullOrWhiteSpace(prior.MinimumDeposit) && prior.MinimumDeposit != "-")
                             item.MinimumDeposit = prior.MinimumDeposit;
+                        if (item.PrizePool == "-" && HasValue(prior.PrizePool))
+                            item.PrizePool = prior.PrizePool;
                     }
 
                     bool missingMetadata = (item.PromoCode == "-" || item.MinimumDeposit == "-") && !recentlyRendered;
@@ -189,6 +192,7 @@ namespace SkinClubGiveawayDesktop
                 current.Ticket = s.Ticket;
                 current.PromoCode = s.PromoCode;
                 current.MinimumDeposit = s.MinimumDeposit;
+                if (HasValue(s.PrizePool)) current.PrizePool = s.PrizePool;
                 current.Deadline = s.Deadline;
                 current.LastChecked = s.LastChecked;
                 current.Source = s.Source;
@@ -198,6 +202,44 @@ namespace SkinClubGiveawayDesktop
             }
             live.LastScan = scanned.LastScan;
             live.LastDeepScan = scanned.LastDeepScan;
+        }
+
+        // Giveaways saved before the prize pool was recorded, and ended ones (which Refresh does not
+        // re-check), get their prize pool read once from their page. Nothing else about them changes.
+        private static async Task FillMissingPrizePoolsAsync(AppData data)
+        {
+            List<GiveawayItem> missing = data.Items.Where(delegate(GiveawayItem i)
+            {
+                return i != null && !string.IsNullOrWhiteSpace(i.Url) && !HasValue(i.PrizePool);
+            }).Take(80).ToList();
+            if (missing.Count == 0) return;
+            phase = "Refresh: reading prize pools";
+            SemaphoreSlim gate = new SemaphoreSlim(8, 8);
+            int found = 0;
+            List<Task> reads = new List<Task>();
+            foreach (GiveawayItem item in missing)
+            {
+                GiveawayItem target = item;
+                reads.Add(Task.Run(async delegate
+                {
+                    await gate.WaitAsync();
+                    try
+                    {
+                        PageFetch page = await FetchPageAsync(target.Url, MaxPageBytes, true);
+                        string pool = page.Body == null ? "-" : PrizePoolFromHtml(page.Body);
+                        if (HasValue(pool)) { target.PrizePool = pool; Interlocked.Increment(ref found); }
+                    }
+                    catch (Exception ex) { Diag.Swallow("Reading the prize pool of " + target.Url, ex); }
+                    finally { gate.Release(); }
+                }));
+            }
+            await Task.WhenAll(reads);
+            ActivityLog.Write("SCAN", "Prize pool read for " + found + " of " + missing.Count + " saved giveaways that had none");
+        }
+
+        private static bool HasValue(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) && value.Trim() != "-";
         }
 
         private static bool HasFutureDeadline(GiveawayItem item)
@@ -241,6 +283,7 @@ namespace SkinClubGiveawayDesktop
                             existing.MinimumDeposit = u.MinimumDeposit;
                         if (!string.IsNullOrWhiteSpace(u.Ticket) && u.Ticket != "-")
                             existing.Ticket = u.Ticket;
+                        if (HasValue(u.PrizePool)) existing.PrizePool = u.PrizePool;
 
                         existing.LastChecked = u.LastChecked;
                         existing.Error = u.Error;
@@ -260,6 +303,7 @@ namespace SkinClubGiveawayDesktop
                         else if (string.IsNullOrWhiteSpace(existing.PromoCode)) existing.PromoCode = "-";
                         if (!string.IsNullOrWhiteSpace(u.MinimumDeposit) && u.MinimumDeposit != "-") existing.MinimumDeposit = u.MinimumDeposit;
                         else if (string.IsNullOrWhiteSpace(existing.MinimumDeposit)) existing.MinimumDeposit = "-";
+                        if (HasValue(u.PrizePool)) existing.PrizePool = u.PrizePool;
                         existing.Deadline = u.Deadline; existing.LastChecked = u.LastChecked;
                         existing.Source = u.Source; existing.Error = u.Error;
                         if (!string.IsNullOrWhiteSpace(u.RenderedAt)) existing.RenderedAt = u.RenderedAt;
@@ -315,6 +359,7 @@ namespace SkinClubGiveawayDesktop
                 foreach (Candidate c in cs) tasks.Add(ValidateAsync(c, throttle));
                 GiveawayItem[] updates = tasks.Count == 0 ? new GiveawayItem[0] : await Task.WhenAll(tasks);
                 MergeItems(data, updates);
+                await FillMissingPrizePoolsAsync(data);
                 data.LastScan = DateTime.UtcNow.ToString("o");
                 DataStore.Save(data);
                 ActivityLog.Write("SCAN", "Refresh complete; " + updates.Length + " pages checked");

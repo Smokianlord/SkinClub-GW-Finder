@@ -410,6 +410,41 @@ namespace SkinClubGiveawayDesktop
             return UsdAmount(raw);
         }
 
+        // Every creator page shows the prize pool the same way in every language: a small label
+        // ("total prize pool", "pool total de premios", "toplam ödül havuzu", ...) followed by the amount:
+        // <p class="red-label red-label_small">total prize pool</p> <p class="red-label">$1,000</p>
+        private static readonly Regex PrizePoolMarkupRegex = new Regex(
+            @"class\s*=\s*[""'][^""']*\bred-label_small\b[^""']*[""'][^>]*>[^<]{1,80}</p>\s*<p\b[^>]*class\s*=\s*[""'][^""']*\bred-label\b[^""']*[""'][^>]*>\s*([^<]{1,40}?)\s*</",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        // Plain-text fallback for a page without that markup.
+        private static readonly Regex PrizePoolTextRegex = new Regex(
+            @"(?:total\s+)?prize\s+pool\s*[:\-]?\s*((?:US)?\$\s*[0-9][0-9,.]*|[0-9][0-9,.]*\s*(?:\$|USD))",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // The giveaway's total prize pool in USD ("1,000$"), or "-" when the page does not show one.
+        internal static string PrizePoolFromHtml(string html)
+        {
+            if (string.IsNullOrEmpty(html)) return "-";
+            Match m = PrizePoolMarkupRegex.Match(html);
+            string amount = m.Success ? WebUtility.HtmlDecode(m.Groups[1].Value) : null;
+            if (amount == null || !Regex.IsMatch(amount, @"[0-9]"))
+            {
+                Match t = PrizePoolTextRegex.Match(HtmlToText(html));
+                amount = t.Success ? t.Groups[1].Value : null;
+            }
+            return amount == null ? "-" : UsdAmount(amount);
+        }
+
+        // The number behind an amount shown by UsdAmount ("1,000$" -> 1000, "7.50$" -> 7.5), for sorting.
+        internal static bool TryUsdValue(string shown, out decimal value)
+        {
+            value = 0m;
+            if (string.IsNullOrWhiteSpace(shown) || shown.Trim() == "-") return false;
+            string digits = Regex.Replace(shown, @"[^0-9.]", "");
+            return digits.Length > 0 && decimal.TryParse(digits, System.Globalization.NumberStyles.AllowDecimalPoint,
+                System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
+
         private static readonly Regex AmountNumberRegex = new Regex(@"[0-9]+(?:[.,][0-9]+)?", RegexOptions.Compiled);
         private static readonly Regex OtherCurrencyRegex = new Regex(@"€|£|₺|R\$|\b(?:EUR|GBP|RUB|PLN|BRL|ARS|UAH|BDT|TRY)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
@@ -434,9 +469,10 @@ namespace SkinClubGiveawayDesktop
             decimal amount;
             if (!decimal.TryParse(number, System.Globalization.NumberStyles.AllowDecimalPoint, System.Globalization.CultureInfo.InvariantCulture, out amount))
                 return "-";
+            // Thousands are grouped so prize pools read easily ("1,000$"); deposits are small ("5$").
             string shown = amount == decimal.Truncate(amount)
-                ? decimal.Truncate(amount).ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : amount.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+                ? decimal.Truncate(amount).ToString("#,0", System.Globalization.CultureInfo.InvariantCulture)
+                : amount.ToString("#,0.00", System.Globalization.CultureInfo.InvariantCulture);
             Match other = OtherCurrencyRegex.Match(value);
             if (other.Success)
             {
@@ -635,6 +671,7 @@ namespace SkinClubGiveawayDesktop
                 Ticket = ticket,
                 PromoCode = promoCode,
                 MinimumDeposit = minimumDeposit,
+                PrizePool = PrizePoolFromHtml(html),
                 Deadline = explicitEnded ? "Ended" : deadline,
                 Remaining = remaining,
                 Total = total
