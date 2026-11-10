@@ -115,13 +115,22 @@ namespace SkinClubGiveawayDesktop
                     e.SuppressKeyPress = true;
                 }
             };
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception swallowed) { Diag.Swallow("Loading window icon", swallowed); }
+            Icon = Ui.AppIcon;
 
-            // Closing the app must also close every hidden browser render that it owns.
-            // This prevents Edge/Chrome giveaway tabs from remaining in Task Manager.
-            FormClosing += delegate
+            FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
+                // The window's close button only hides the app to the tray, where it keeps checking for
+                // giveaways. It really exits from the tray menu's Exit, or when Windows shuts down.
+                if (tray != null && !exitRequested && e.CloseReason == CloseReason.UserClosing)
+                {
+                    e.Cancel = true;
+                    HideToTray();
+                    return;
+                }
+                // Exiting must also close every hidden browser render the app owns, so no Edge/Chrome
+                // giveaway pages are left in Task Manager.
                 try { if (autoTimer != null) autoTimer.Stop(); } catch (Exception swallowed) { Diag.Swallow("Stopping auto-refresh timer", swallowed); }
+                if (tray != null) tray.Visible = false;
                 BrowserProcessManager.Shutdown();
             };
 
@@ -169,23 +178,116 @@ namespace SkinClubGiveawayDesktop
             else await RefreshAsync(false);
         }
 
+        private bool exitRequested;
+        private bool trayHintShown;
+        private ToolStripMenuItem trayDeepSearch, trayRefresh;
+
+        // The tray icon is always there while the app runs. Left-click opens the window; right-click shows
+        // Open, Deep Search, Refresh, Joined giveaways and Exit. Notifications (Settings) only decide
+        // whether it shows pop-ups about new giveaways.
         private void BuildTray()
         {
             tray = new NotifyIcon();
-            tray.Icon = Icon ?? SystemIcons.Application;
+            tray.Icon = Ui.AppIconSized(SystemInformation.SmallIconSize.Width);
             tray.Text = "SkinClub GW Finder";
-            tray.Visible = AppSettings.Current.Notifications;
+            tray.ContextMenuStrip = BuildTrayMenu();
+            tray.Visible = true;
             tray.BalloonTipClicked += delegate { BringToFrontFromTray(); };
             tray.MouseClick += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) BringToFrontFromTray(); };
         }
 
-        // Also used when a second copy of the app is started: show this one instead.
+        private ContextMenuStrip BuildTrayMenu()
+        {
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.Renderer = new TrayMenuRenderer();
+            menu.BackColor = Ui.Surface2;
+            menu.ForeColor = Ui.Text;
+            menu.Font = new Font("Segoe UI", 9.5F);
+            menu.ImageScalingSize = new Size(20, 20);
+            menu.Padding = new Padding(4);
+
+            ToolStripMenuItem open = TrayItem("Open SkinClub GW Finder", Icons.Gift, delegate { BringToFrontFromTray(); });
+            open.Font = new Font("Segoe UI Semibold", 9.5F);
+            trayDeepSearch = TrayItem("Deep Search", Icons.Magnifier, async delegate { await TraySearchAsync(true); });
+            trayRefresh = TrayItem("Refresh", Icons.Hourglass, async delegate { await TraySearchAsync(false); });
+            ToolStripMenuItem joined = TrayItem("Joined giveaways", Icons.Check, delegate { ShowJoined(); });
+            ToolStripMenuItem exit = TrayItem("Exit", null, delegate { ExitApp(); });
+
+            menu.Items.Add(open);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(trayDeepSearch);
+            menu.Items.Add(trayRefresh);
+            menu.Items.Add(joined);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(exit);
+            menu.Opening += delegate
+            {
+                // A search already running cannot be started twice.
+                trayDeepSearch.Enabled = trayRefresh.Enabled = !scanning;
+                trayDeepSearch.Text = scanning ? "Searching..." : "Deep Search";
+            };
+            return menu;
+        }
+
+        private static ToolStripMenuItem TrayItem(string text, string icon, EventHandler click)
+        {
+            ToolStripMenuItem item = new ToolStripMenuItem(text);
+            item.ForeColor = Ui.Text;
+            item.Padding = new Padding(4, 6, 4, 6);
+            if (icon != null) item.Image = Icons.Get(icon, 20);
+            item.Click += click;
+            return item;
+        }
+
+        private void HideToTray()
+        {
+            Hide();
+            if (trayHintShown || tray == null) return;
+            trayHintShown = true;
+            tray.ShowBalloonTip(6000, "Still running in the tray",
+                "SkinClub GW Finder keeps checking for giveaways. Right-click this icon for Deep Search, Joined giveaways or Exit.", ToolTipIcon.Info);
+        }
+
+        private void ShowJoined()
+        {
+            BringToFrontFromTray();
+            if (joinedButton != null) joinedButton.PerformClick();
+        }
+
+        private void ExitApp()
+        {
+            exitRequested = true;
+            Close();
+        }
+
+        // Deep Search or Refresh started from the tray. While the window is hidden, the result is reported
+        // with a tray pop-up instead.
+        private async Task TraySearchAsync(bool deep)
+        {
+            if (scanning) return;
+            HashSet<string> before = ActiveKeys();
+            if (deep) await DeepSearchAsync(true); else await RefreshAsync(true);
+            if (IsDisposed || tray == null || Visible) return;
+            List<GiveawayItem> fresh = data.Items.Where(delegate(GiveawayItem i)
+            {
+                return !i.Joined && i.Url != null && string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !before.Contains(i.Url);
+            }).ToList();
+            int active = data.Items.Count(delegate(GiveawayItem i) { return !i.Joined && string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase); });
+            string title = (deep ? "Deep Search" : "Refresh") + " complete";
+            string text = fresh.Count == 0
+                ? "No new giveaways. " + active + " active."
+                : fresh.Count + " new: " + string.Join(", ", fresh.Take(4).Select(delegate(GiveawayItem i) { return i.Creator; }).ToArray()) + (fresh.Count > 4 ? " and more" : "") + ". " + active + " active.";
+            tray.ShowBalloonTip(6000, title, text, ToolTipIcon.Info);
+        }
+
+        // Also used when a second copy of the app is started, and from the tray: show this one.
         public void BringToFrontFromTray()
         {
             if (IsDisposed) return;
-            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
             Show();
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
             Activate();
+            BringToFront();
         }
 
         private HashSet<string> ActiveKeys()
@@ -199,7 +301,7 @@ namespace SkinClubGiveawayDesktop
         // Only automatic refreshes notify: after a manual action the user is already looking at the result.
         private void NotifyChanges(HashSet<string> before)
         {
-            if (tray == null || !tray.Visible || !AppSettings.Current.Notifications) return;
+            if (tray == null || !AppSettings.Current.Notifications) return;
             List<GiveawayItem> fresh = data.Items.Where(delegate(GiveawayItem i)
             {
                 return !i.Joined && i.Url != null && string.Equals(i.Status, "active", StringComparison.OrdinalIgnoreCase) && !before.Contains(i.Url);
@@ -233,7 +335,6 @@ namespace SkinClubGiveawayDesktop
                 form.Apply();
             }
             autoTimer.Interval = AppSettings.Current.RefreshMinutes * 60 * 1000;
-            if (tray != null) tray.Visible = AppSettings.Current.Notifications;
             DataStore.Save(data);
             Render();
         }

@@ -10,6 +10,7 @@ A Windows desktop app that finds SkinClub creator giveaways, checks each one, an
 - **Deep Search** looks through Telegram, YouTube, web search and about 50 known creator sites, and checks the dated giveaway pages each creator usually posts (the 1st and 2nd of recent months and next month).
 - **Learns new creators:** once one link from a creator is saved, that creator's later giveaways are found automatically.
 - **Automatic search:** a Deep Search runs by itself every 60 minutes and the saved giveaways are re-checked every 10 minutes. Starting the app only does the quick re-check.
+- **Runs in the tray:** closing the window keeps the app running in the system tray, still checking for giveaways. Right-click the tray icon for Deep Search, Refresh, Joined giveaways or Exit; left-click opens the window.
 - **Notifications:** an optional Windows notification when a new giveaway appears or one ends today.
 
 ### Reading each giveaway

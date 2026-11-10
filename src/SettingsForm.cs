@@ -25,7 +25,7 @@ namespace SkinClubGiveawayDesktop
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception swallowed) { Diag.Swallow("Loading window icon", swallowed); }
+            Icon = Ui.AppIcon;
 
             AppSettings s = AppSettings.Current;
 

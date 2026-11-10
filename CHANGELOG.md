@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0] - 2026-11-10
+
+- Closing the window now keeps the app running in the system tray, still checking for giveaways. The tray icon's menu has Open, Deep Search, Refresh, Joined giveaways and Exit; a search started from the tray reports its result in a tray pop-up. Exit really closes the app.
+- The tray icon is always shown; the Notifications setting only controls the pop-ups about new giveaways.
+- Windows, the taskbar, Alt+Tab and the tray use the full multi-size app icon, so it stays sharp at every size. The app has its own taskbar identity, so the taskbar shows the current icon instead of an old one Windows cached for the exe.
+- Tray menu: icons, text and separator lines share one left edge, and icons are centred on their row.
+
 ## [2.1.0] - 2026-11-10
 
 - New **Prize Pool** column: each giveaway's total prize value in USD (for example `1,000$`), read from the page in any language. It sorts by amount and can be searched. Saved giveaways, including ended ones, get their prize pool filled in on the next Refresh or Deep Search.

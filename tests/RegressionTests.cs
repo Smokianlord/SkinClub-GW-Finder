@@ -452,6 +452,30 @@ static class RegressionTests
 
         CheckDialogLayout(new SettingsForm(), "Settings dialog");
         CheckDialogLayout(new AddLinkForm(), "Add link dialog");
+
+        // Closing the window keeps the app running in the tray; Exit in the tray menu really closes it.
+        // (Last, because exiting shuts the browser manager down for the rest of the process.)
+        AppData trayData = new AppData();
+        MainForm trayForm = new MainForm(trayData, false);
+        trayForm.Show();
+        Application.DoEvents();
+        Call(trayForm, "BuildTray");
+        NotifyIcon trayIcon = (NotifyIcon)Field(trayForm, "tray");
+        ContextMenuStrip trayMenu = trayIcon.ContextMenuStrip;
+        string[] trayItems = trayMenu.Items.Cast<ToolStripItem>().Where(i => !(i is ToolStripSeparator)).Select(i => i.Text).ToArray();
+        Check(trayIcon.Visible && trayIcon.Icon != null && string.Join("|", trayItems) == "Open SkinClub GW Finder|Deep Search|Refresh|Joined giveaways|Exit",
+            "Tray icon offers Open, Deep Search, Refresh, Joined giveaways and Exit");
+        trayForm.Close();
+        Application.DoEvents();
+        Check(!trayForm.IsDisposed && !trayForm.Visible, "Closing the window hides the app to the tray instead of exiting");
+        Call(trayForm, "ShowJoined");
+        Application.DoEvents();
+        Check(trayForm.Visible && ((DataGridView)Field(trayForm, "grid")).Visible && (bool)Field(trayForm, "showingJoined"), "Joined giveaways in the tray menu opens the window on Joined");
+        Call(trayForm, "ExitApp");
+        Application.DoEvents();
+        Check(trayForm.IsDisposed && !trayIcon.Visible, "Exit in the tray menu closes the app and removes the tray icon");
+        Check(Ui.AppIcon != null && Ui.AppIcon.Width > 0, "The app icon is embedded in the exe");
+
         Console.WriteLine(checks + " checks passed. Artifacts: " + folder);
     }
 }

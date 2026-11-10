@@ -6,9 +6,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("SkinClub GW Finder")]
 [assembly: AssemblyProduct("SkinClub GW Finder")]
 [assembly: AssemblyDescription("SkinClub creator giveaway monitor")]
-[assembly: AssemblyVersion("2.1.0.0")]
-[assembly: AssemblyFileVersion("2.1.0.0")]
-[assembly: AssemblyInformationalVersion("2.1.0")]
+[assembly: AssemblyVersion("2.2.0.0")]
+[assembly: AssemblyFileVersion("2.2.0.0")]
+[assembly: AssemblyInformationalVersion("2.2.0")]
 
 namespace SkinClubGiveawayDesktop
 {
@@ -19,9 +19,19 @@ namespace SkinClubGiveawayDesktop
         private const string MutexName = @"Local\SkinClubGWFinder.SingleInstance";
         private const string ShowEventName = @"Local\SkinClubGWFinder.ShowWindow";
 
+        // The app's own taskbar identity. Without it, Windows groups the window by the exe's path and shows
+        // the icon it cached for that path, which can be an old icon long after the exe was updated. With
+        // it, the taskbar shows the icon the window itself supplies.
+        private const string AppUserModelId = "Smokianlord.SkinClubGWFinder";
+
+        [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
         [STAThread]
         static void Main()
         {
+            try { SetCurrentProcessExplicitAppUserModelID(AppUserModelId); }
+            catch (Exception ex) { Diag.Swallow("Setting the taskbar identity", ex); }
             // Only one copy may run: two copies would write data.json and launch browsers at the
             // same time. A second launch just asks the running copy to come to the front.
             bool firstInstance;

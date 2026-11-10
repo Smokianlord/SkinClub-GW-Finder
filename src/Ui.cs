@@ -111,6 +111,36 @@ namespace SkinClubGiveawayDesktop
 
         public static Color Alpha(Color c, int alpha) { return Color.FromArgb(Math.Max(0, Math.Min(255, alpha)), c.R, c.G, c.B); }
 
+        // The app icon with all its sizes (16 to 256 px), so the title bar, taskbar, Alt+Tab and tray
+        // each get a sharp picture. Falls back to the exe's own icon.
+        private static Icon appIcon;
+        public static Icon AppIcon
+        {
+            get
+            {
+                if (appIcon != null) return appIcon;
+                try
+                {
+                    using (Stream s = typeof(Ui).Assembly.GetManifestResourceStream("SkinClubGWFinder.AppIcon.ico"))
+                        if (s != null) appIcon = new Icon(s);
+                }
+                catch (Exception ex) { Diag.Swallow("Loading the app icon", ex); }
+                if (appIcon == null)
+                {
+                    try { appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+                    catch (Exception ex) { Diag.Swallow("Loading the exe icon", ex); appIcon = SystemIcons.Application; }
+                }
+                return appIcon;
+            }
+        }
+
+        // The app icon at a given size (16 for the tray, 32 for windows).
+        public static Icon AppIconSized(int size)
+        {
+            try { return new Icon(AppIcon, new Size(size, size)); }
+            catch (Exception ex) { Diag.Swallow("Sizing the app icon", ex); return AppIcon; }
+        }
+
         // Small capitals label above a dialog field.
         public static Label FieldLabel(string text, int y)
         {
@@ -546,6 +576,63 @@ namespace SkinClubGiveawayDesktop
         public override Color MenuItemPressedGradientEnd { get { return Ui.Surface3; } }
     }
 
+    // Dark menu for the tray icon. Separators and the hover highlight span the whole row, starting at the
+    // icons' left edge, so icons, text and lines share one left margin; icons are centred on their row.
+    internal class TrayMenuRenderer : ToolStripProfessionalRenderer
+    {
+        public const int Inset = 8;
+
+        public TrayMenuRenderer() : base(new DarkMenuColors()) { RoundedEdges = false; }
+
+        protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+        {
+            using (SolidBrush b = new SolidBrush(Ui.Surface2)) e.Graphics.FillRectangle(b, e.AffectedBounds);
+        }
+
+        // No separate shaded strip behind the icons.
+        protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+        {
+            Rectangle r = new Rectangle(0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
+            using (Pen p = new Pen(Ui.LineStrong)) e.Graphics.DrawRectangle(p, r);
+        }
+
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            int y = e.Item.Height / 2;
+            using (Pen p = new Pen(Ui.LineStrong)) e.Graphics.DrawLine(p, Inset, y, e.Item.Width - Inset, y);
+        }
+
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            if (!e.Item.Selected || !e.Item.Enabled) return;
+            Rectangle r = new Rectangle(Inset - 4, 1, e.Item.Width - (Inset - 4) * 2, e.Item.Height - 2);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath path = Ui.RoundPath(r, 5))
+            using (SolidBrush b = new SolidBrush(Ui.Mix(Ui.Surface3, Ui.Pink, 0.18)))
+                e.Graphics.FillPath(b, path);
+        }
+
+        protected override void OnRenderItemImage(ToolStripItemImageRenderEventArgs e)
+        {
+            if (e.Image == null) return;
+            // Centred vertically on the row, at the same left edge as the separators.
+            int size = e.ImageRectangle.Width;
+            Rectangle target = new Rectangle(Inset, (e.Item.Height - size) / 2, size, size);
+            e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            e.Graphics.DrawImage(e.Image, target);
+        }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            e.TextColor = e.Item.Enabled ? Ui.Text : Ui.Muted;
+            e.TextFormat = (e.TextFormat & ~TextFormatFlags.Top & ~TextFormatFlags.Bottom) | TextFormatFlags.VerticalCenter;
+            e.TextRectangle = new Rectangle(e.TextRectangle.X, 0, e.TextRectangle.Width, e.Item.Height);
+            base.OnRenderItemText(e);
+        }
+    }
+
     // Replaces the white system combo box: shows the current value and opens a dark menu.
     public class UiPicker : Control
     {
@@ -718,7 +805,7 @@ namespace SkinClubGiveawayDesktop
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception swallowed) { Diag.Swallow("Loading window icon", swallowed); }
+            Icon = Ui.AppIcon;
 
             Label title = new Label();
             title.Text = "ADD GIVEAWAYS";

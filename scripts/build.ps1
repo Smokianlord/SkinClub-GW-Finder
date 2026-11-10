@@ -21,6 +21,8 @@ $arguments = @(
     '/reference:System.Windows.Forms.dll', '/reference:System.Net.Http.dll', '/reference:System.Web.Extensions.dll'
 )
 if ($Main) { $arguments += "/main:$Main" }
+# The app icon (every size) is embedded so windows and the tray icon can use the right size.
+$arguments += "/resource:$(Join-Path $repo 'SkinClubGWFinder.ico'),SkinClubGWFinder.AppIcon.ico"
 # Icons (assets/icons/*.png) are embedded in the exe as SkinClubGWFinder.Icons.<name>.png.
 foreach ($icon in @(Get-ChildItem (Join-Path $repo 'assets/icons') -Filter *.png -ErrorAction SilentlyContinue)) {
     $arguments += "/resource:$($icon.FullName),SkinClubGWFinder.Icons.$($icon.Name)"
