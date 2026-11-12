@@ -49,6 +49,8 @@ namespace SkinClubGiveawayDesktop
         private TableLayoutPanel filterPanelRef;
         private bool showingHistory = false;
         private bool showingJoined = false;
+        private bool showingQuizzes = false;
+        private Button quizzesButton;
         private bool scanning = false;
         private System.Windows.Forms.Timer autoTimer;
         private readonly System.Windows.Forms.Timer filterTimer = new System.Windows.Forms.Timer();
@@ -64,7 +66,9 @@ namespace SkinClubGiveawayDesktop
         {
             { "active", new KeyValuePair<string, bool>("Creator", true) },
             { "joined", new KeyValuePair<string, bool>("Creator", true) },
-            { "history", new KeyValuePair<string, bool>("Deadline", false) }
+            { "history", new KeyValuePair<string, bool>("Deadline", false) },
+            // Quizzes: live ones first, the one ending soonest on top; closed ones after them.
+            { "quizzes", new KeyValuePair<string, bool>("Deadline", true) }
         };
 
         // Restrained product-dashboard palette: neutral ink surfaces with precise accent usage.
@@ -540,21 +544,26 @@ namespace SkinClubGiveawayDesktop
             tabs.BackColor = Color.Transparent;
             nav.Controls.Add(tabs, 0, 0);
 
-            activeButton = MakeTab("Active");
+            // "Creator" is the list of running creator giveaways (the field keeps its old name).
+            activeButton = MakeTab("Creator");
+            quizzesButton = MakeTab("Quizzes");
             joinedButton = MakeTab("Joined");
             historyButton = MakeTab("History");
             logsButton = MakeTab("Logs");
             ((UiButton)activeButton).AccentColor = Ui.Lime;
+            ((UiButton)quizzesButton).AccentColor = Color.FromArgb(150, 120, 255);
             ((UiButton)joinedButton).AccentColor = Ui.Cyan;
             ((UiButton)historyButton).AccentColor = Ui.Gold;
             ((UiButton)logsButton).AccentColor = Ui.Pink;
             tabs.Controls.Add(activeButton);
+            tabs.Controls.Add(quizzesButton);
             tabs.Controls.Add(joinedButton);
             tabs.Controls.Add(historyButton);
-            activeButton.Click += delegate { showingHistory = false; showingJoined = false; showingLogs = false; Render(); };
-            joinedButton.Click += delegate { showingJoined = true; showingHistory = false; showingLogs = false; Render(); };
-            historyButton.Click += delegate { showingHistory = true; showingJoined = false; showingLogs = false; Render(); };
-            logsButton.Click += delegate { showingLogs = true; showingHistory = false; showingJoined = false; Render(); };
+            activeButton.Click += delegate { ShowView(false, false, false, false); };
+            quizzesButton.Click += delegate { ShowView(true, false, false, false); };
+            joinedButton.Click += delegate { ShowView(false, true, false, false); };
+            historyButton.Click += delegate { ShowView(false, false, true, false); };
+            logsButton.Click += delegate { ShowView(false, false, false, true); };
 
             Panel navTools = new GlassPanel();
             navTools.Dock = DockStyle.Fill;
@@ -781,11 +790,13 @@ namespace SkinClubGiveawayDesktop
             grid.Paint += delegate(object sender, PaintEventArgs e)
             {
                 if (grid.Rows.Count != 0) return;
-                string heading = filterBox.TextLength > 0 ? "No matching giveaways"
+                string heading = filterBox.TextLength > 0 ? (showingQuizzes ? "No matching quizzes" : "No matching giveaways")
+                    : showingQuizzes ? "No quizzes loaded yet"
                     : showingJoined ? "Nothing joined yet"
                     : showingHistory ? "No history yet"
-                    : "No active giveaways";
+                    : "No creator giveaways";
                 string detail = filterBox.TextLength > 0 ? "Try another search, or press Esc to clear it."
+                    : showingQuizzes ? "Press Refresh to load the quizzes from community.skin.club."
                     : showingJoined ? "Use the + button on a giveaway to save it here."
                     : showingHistory ? "Ended giveaways are kept here automatically."
                     : "Press Refresh to re-check saved links, or Deep Search to find new ones.";
@@ -926,7 +937,8 @@ namespace SkinClubGiveawayDesktop
             {
                 sortColumn = c.Name;
                 // In History the Deadline column sorts by when the giveaway ended: newest first.
-                sortAscending = !(showingHistory && c.Name == "Deadline");
+                // In Quizzes, the people column starts with the most popular quiz.
+                sortAscending = !((showingHistory && c.Name == "Deadline") || (showingQuizzes && c.Name == "Ticket"));
             }
             Render();
         }
@@ -973,6 +985,9 @@ namespace SkinClubGiveawayDesktop
             if (s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(8);
             else if (s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(7);
             if (s.StartsWith("www.", StringComparison.OrdinalIgnoreCase)) s = s.Substring(4);
+            // Quiz links all share the same site prefix; show the part that differs ("quizzes/skin-detective").
+            int quiz = s.IndexOf("/quizzes/", StringComparison.OrdinalIgnoreCase);
+            if (quiz > 0 && s.StartsWith("community.skin.club", StringComparison.OrdinalIgnoreCase)) s = s.Substring(quiz + 1);
             return s.TrimEnd('/');
         }
 
@@ -1102,6 +1117,12 @@ namespace SkinClubGiveawayDesktop
                 case "Ticket":
                     {
                         long remaining, total;
+                        if (showingQuizzes && !missing)
+                        {
+                            // Quizzes: the number of people who took part.
+                            TextRenderer.DrawText(g, value, numberFont, text, ended ? Ui.Muted : TextColor, Ui.Single);
+                            break;
+                        }
                         if (missing || !TryTicketNumbers(value, out remaining, out total) || total <= 0)
                         {
                             TextRenderer.DrawText(g, missing ? "–" : value, cellFont, text, Ui.Muted, Ui.Single);
@@ -1151,8 +1172,11 @@ namespace SkinClubGiveawayDesktop
                         if (missing) { TextRenderer.DrawText(g, "–", cellFont, text, Ui.Muted, Ui.Single); break; }
                         // A trophy, then the total prize value.
                         Icons.DrawCentered(g, Icons.Trophy, text.X + 11, cb.Y + (cb.Height - 1) / 2f, 22);
-                        TextRenderer.DrawText(g, value, numberFont, new Rectangle(text.X + 28, text.Y, Math.Max(1, text.Width - 28), text.Height),
-                            ended ? Ui.Muted : Color.FromArgb(255, 150, 226), Ui.Single);
+                        Rectangle prizeRect = new Rectangle(text.X + 28, text.Y, Math.Max(1, text.Width - 28), text.Height);
+                        if (showingQuizzes) // a skin name, not an amount
+                            TextRenderer.DrawText(g, value, FitFont(g, value, prizeRect.Width, cellFont, cellFontSmall), prizeRect, ended ? Ui.Muted : Ui.TextSoft, Ui.Single);
+                        else
+                            TextRenderer.DrawText(g, value, numberFont, prizeRect, ended ? Ui.Muted : Color.FromArgb(255, 150, 226), Ui.Single);
                         break;
                     }
                 case "MinimumDeposit":
@@ -1394,7 +1418,11 @@ namespace SkinClubGiveawayDesktop
         private List<GiveawayItem> CurrentItems()
         {
             List<GiveawayItem> list;
-            if (showingJoined)
+            if (showingQuizzes)
+            {
+                list = (data.Quizzes ?? new List<GiveawayItem>()).Where(delegate(GiveawayItem q) { return q != null; }).ToList();
+            }
+            else if (showingJoined)
             {
                 list = data.Items.Where(delegate(GiveawayItem i) { return i.Joined; }).ToList();
             }
@@ -1448,7 +1476,18 @@ namespace SkinClubGiveawayDesktop
         private int CompareItems(GiveawayItem a, GiveawayItem b)
         {
             int cmp = 0;
-            if (string.Equals(sortColumn, "Ticket", StringComparison.OrdinalIgnoreCase))
+            if (showingQuizzes && string.Equals(sortColumn, "Ticket", StringComparison.OrdinalIgnoreCase))
+            {
+                long ap, bp;
+                bool ah = long.TryParse(a.Ticket, out ap), bh = long.TryParse(b.Ticket, out bp);
+                if (ah != bh) return ah ? -1 : 1;
+                if (ah && bh) cmp = ap.CompareTo(bp);
+            }
+            else if (showingQuizzes && string.Equals(sortColumn, "PrizePool", StringComparison.OrdinalIgnoreCase))
+            {
+                cmp = string.Compare(a.PrizePool ?? "", b.PrizePool ?? "", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (string.Equals(sortColumn, "Ticket", StringComparison.OrdinalIgnoreCase))
             {
                 long ar, at, br, bt;
                 bool ah = TryTicketNumbers(a.Ticket, out ar, out at);
@@ -1582,9 +1621,37 @@ namespace SkinClubGiveawayDesktop
             return false;
         }
 
+        // Switches to one view: Creator (all false), Quizzes, Joined, History or Logs.
+        private void ShowView(bool quizzes, bool joined, bool history, bool logs)
+        {
+            showingQuizzes = quizzes;
+            showingJoined = joined;
+            showingHistory = history;
+            showingLogs = logs;
+            Render();
+        }
+
+        // The table's columns serve two kinds of rows. For quizzes: QUIZ (title), LINK, 1ST PRIZE,
+        // PEOPLE and DEADLINE; the promocode, deposit and join columns do not apply and are hidden.
+        private void ApplyColumnsForView()
+        {
+            bool quiz = showingQuizzes;
+            if (grid.Columns["PromoCode"].Visible == !quiz && grid.Columns["Creator"].HeaderText == (quiz ? "QUIZ" : "CREATOR")) return;
+            grid.Columns["Creator"].HeaderText = quiz ? "QUIZ" : "CREATOR";
+            grid.Columns["Creator"].Width = quiz ? 350 : 180;
+            grid.Columns["PrizePool"].HeaderText = quiz ? "1ST PRIZE" : "PRIZE POOL";
+            grid.Columns["PrizePool"].Width = quiz ? 300 : 116;
+            grid.Columns["Ticket"].HeaderText = quiz ? "PEOPLE" : "TICKETS";
+            grid.Columns["Ticket"].Width = quiz ? 110 : 128;
+            grid.Columns["PromoCode"].Visible = !quiz;
+            grid.Columns["MinimumDeposit"].Visible = !quiz;
+            grid.Columns["JoinedAction"].Visible = !quiz;
+        }
+
         private void ApplyViewTheme()
         {
-            SetTab(activeButton, !showingHistory && !showingJoined && !showingLogs);
+            SetTab(activeButton, !showingHistory && !showingJoined && !showingLogs && !showingQuizzes);
+            SetTab(quizzesButton, showingQuizzes);
             SetTab(joinedButton, showingJoined);
             SetTab(historyButton, showingHistory);
             SetTab(logsButton, showingLogs);
@@ -1614,7 +1681,7 @@ namespace SkinClubGiveawayDesktop
         // Save the sort of the tab being left and restore the sort of the tab being opened.
         private void SwitchSortForView()
         {
-            string view = showingHistory ? "history" : (showingJoined ? "joined" : "active");
+            string view = showingQuizzes ? "quizzes" : (showingHistory ? "history" : (showingJoined ? "joined" : "active"));
             if (view == currentSortView) return;
             sortByView[currentSortView] = new KeyValuePair<string, bool>(sortColumn, sortAscending);
             KeyValuePair<string, bool> next = sortByView[view];
@@ -1645,15 +1712,26 @@ namespace SkinClubGiveawayDesktop
             int jc = data.Items.Count(delegate(GiveawayItem i) { return i.Joined; });
             lastCheck.Text = "Last checked: " + FormatTime(data.LastScan);
 
-            SetTabText(activeButton, "Active", ac);
+            int qc = (data.Quizzes ?? new List<GiveawayItem>()).Count(delegate(GiveawayItem q) { return q != null && string.Equals(q.Status, "active", StringComparison.OrdinalIgnoreCase); });
+            SetTabText(activeButton, "Creator", ac);
+            SetTabText(quizzesButton, "Quizzes", qc);
             SetTabText(historyButton, "History", hc);
             SetTabText(joinedButton, "Joined", jc);
             UpdateStats(ac, jc);
+            if (!showingLogs) ApplyColumnsForView();
 
-            if (showingJoined)
+            if (showingQuizzes)
+            {
+                int all = data.Quizzes == null ? 0 : data.Quizzes.Count;
+                viewTitle.Text = "QUIZZES";
+                viewSubtitle.Text = all == 0
+                    ? "Press Refresh to load the quizzes from community.skin.club"
+                    : qc + " live of " + all + "  ·  live quizzes first  ·  click a link to open the quiz";
+            }
+            else if (showingJoined)
             {
                 viewTitle.Text = "JOINED GIVEAWAYS";
-                viewSubtitle.Text = "Saved by you  \u00b7  use \u00d7 to move an item back to Active or History";
+                viewSubtitle.Text = "Saved by you  \u00b7  use \u00d7 to move an item back to Creator or History";
             }
             else if (showingHistory)
             {
@@ -1664,7 +1742,7 @@ namespace SkinClubGiveawayDesktop
             }
             else
             {
-                viewTitle.Text = "ACTIVE GIVEAWAYS";
+                viewTitle.Text = "CREATOR GIVEAWAYS";
                 viewSubtitle.Text = "Running and not joined yet  \u00b7  click a column header to sort";
             }
 
@@ -1840,6 +1918,14 @@ namespace SkinClubGiveawayDesktop
                     });
                 }
             }
+            if (source.Quizzes != null)
+                foreach (GiveawayItem q in source.Quizzes)
+                    if (q != null)
+                        clone.Quizzes.Add(new GiveawayItem
+                        {
+                            Creator = q.Creator, Url = q.Url, Status = q.Status, Ticket = q.Ticket, PromoCode = q.PromoCode,
+                            MinimumDeposit = q.MinimumDeposit, PrizePool = q.PrizePool, Deadline = q.Deadline, LastChecked = q.LastChecked, Source = q.Source
+                        });
             return clone;
         }
 

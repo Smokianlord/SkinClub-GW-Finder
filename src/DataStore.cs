@@ -46,6 +46,8 @@ namespace SkinClubGiveawayDesktop
                 AppData data = js.Deserialize<AppData>(json);
                 if (data == null) data = DefaultData();
                 if (data.Items == null) data.Items = new List<GiveawayItem>();
+                if (data.Quizzes == null) data.Quizzes = new List<GiveawayItem>();
+                data.Quizzes.RemoveAll(delegate(GiveawayItem quiz) { return quiz == null || string.IsNullOrWhiteSpace(quiz.Url); });
                 data.Items.RemoveAll(delegate(GiveawayItem item) { return item == null || string.IsNullOrWhiteSpace(item.Url); });
                 bool normalized = false;
                 foreach (GiveawayItem item in data.Items)

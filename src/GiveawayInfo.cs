@@ -29,12 +29,15 @@ namespace SkinClubGiveawayDesktop
             return !string.IsNullOrWhiteSpace(code) && code.Trim() != "-";
         }
 
-        // True when the code can be the entry code of the giveaway at this URL.
+        // True when the code can be the entry code of the giveaway at this URL. Entry codes are dated
+        // (LP-NAME-DDMMYY). The date usually equals the URL's, but not always: joispoi.club/021126 uses
+        // LP-JOISPOI24-011126 and theasylum.club/011126 uses LP-ASYLUM-011226. So any dated code counts;
+        // the undated code an ended page shows (LP-XTVFAGX7QP9W) never does.
         public static bool IsEntryCodeFor(string code, string url)
         {
             if (!HasCode(code)) return false;
             string slug = UrlSlug(url);
-            return slug == null || code.Trim().EndsWith("-" + slug, StringComparison.OrdinalIgnoreCase);
+            return slug == null || EntryCodeRegex.IsMatch(code.Trim());
         }
 
         public static string EntryCodeOrDash(string code, string url)

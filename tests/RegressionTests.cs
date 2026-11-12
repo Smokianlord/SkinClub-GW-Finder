@@ -151,7 +151,13 @@ static class RegressionTests
 
         Check(GiveawayInfo.IsEntryCodeFor("LP-KRYOZ-010926", "https://kryoz.club/010926/") &&
               !GiveawayInfo.IsEntryCodeFor("LP-XTVFAGX7QP9W", "https://kryoz.club/010926/") &&
-              !GiveawayInfo.IsEntryCodeFor("-", "https://kryoz.club/010926/"), "Only a code ending with the URL date slug is an entry code");
+              !GiveawayInfo.IsEntryCodeFor("-", "https://kryoz.club/010926/"), "A dated code is an entry code; an undated one is not");
+        // Real pages whose code date differs from the link date (November 2026).
+        Check(GiveawayInfo.IsEntryCodeFor("LP-JOISPOI24-011126", "https://joispoi.club/021126/") &&
+              GiveawayInfo.IsEntryCodeFor("LP-ASYLUM-011226", "https://theasylum.club/011126/"), "An entry code dated differently from its link is still accepted");
+        ParseResult otherDate = Scanner.ParsePage("<html><body><p>PASO 2 Recarga tu saldo desde $5 con el código promocional LP-ASYLUM-011226 <a href=\"https://skin.club/en?utm_promo=LP-ASYLUM-011226\">USAR</a> <a href=\"https://skin.club/en?utm_promo=LP-79RGPHDSZ44S\">x</a></p><div>Tickets restantes: 750 / 750</div></body></html>");
+        Check(GiveawayInfo.EntryCodeOrDash(otherDate.PromoCode, "https://theasylum.club/011126/") == "LP-ASYLUM-011226" && otherDate.MinimumDeposit == "5$",
+            "Code and deposit are read from a page whose code date differs from its link");
 
         AppData codes = new AppData();
         codes.Items.Add(new GiveawayItem { Creator = "Kryoz", Url = "https://kryoz.club/010926/", Status = "ended", PromoCode = "LP-KRYOZ-010926", MinimumDeposit = "$10" });
@@ -161,7 +167,7 @@ static class RegressionTests
         Check(GiveawayInfo.RepairEntryCodes(codes), "Bad entry codes are detected on load");
         Check(codes.Items[1].PromoCode == "LP-KRYOZ-010826" && codes.Items[1].MinimumDeposit == "$5", "A discount code left by an ended page is rebuilt from the creator's code pattern, keeping the deposit");
         Check(codes.Items[2].PromoCode == "-", "A bad code with no known pattern is cleared instead of guessed");
-        Check(codes.Items[3].PromoCode == "LP-KRYOZ-020926" && codes.Items[3].MinimumDeposit == "-", "A code from another giveaway date resets the mixed-up record");
+        Check(codes.Items[3].PromoCode == "LP-KRYOZ-010826" && codes.Items[3].MinimumDeposit == "$3", "A dated code that differs from the link date is kept, with its deposit");
         Check(codes.Items[0].PromoCode == "LP-KRYOZ-010926" && codes.Items[0].MinimumDeposit == "$10", "A correct saved code and deposit are left alone");
 
         AppData latest = new AppData();
@@ -237,6 +243,35 @@ static class RegressionTests
         decimal thousand, cents;
         Check(Scanner.TryUsdValue("1,000$", out thousand) && thousand == 1000m && Scanner.TryUsdValue("7.50$", out cents) && cents == 7.5m &&
               !Scanner.TryUsdValue("-", out cents), "Amounts like 1,000$ are read back as numbers for sorting");
+
+        // Quizzes are read from the community quizzes page: one card per quiz.
+        DateTime quizNow = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        Func<string, string, string, string, string> quizCard = delegate(string slug, string quizTitle, string peopleCount, string timeCell)
+        {
+            return "<div class=\"club-col-4\"><article class=\"club-gap-y-2xl\"><header><figure><a class=\"club-hover-connect\" href=\"https://community.skin.club/en/quizzes/" + slug + "\"><picture></picture>" +
+                "<div class=\"club-giveaway-ticket-info club-giveaway-ticket-info--" + (timeCell.StartsWith("data") ? "open" : "closed") + " club-eq-height-by-row\"><div class=\"club-giveaway-ticket-info__col\"><div class=\"club-text-14-medium\">People</div> <div class=\"club-text-14-extra\">" + peopleCount + "</div></div>" +
+                "<div class=\"club-giveaway-ticket-info__col\"><div class=\"club-text-14-medium\">time</div> <div class=\"club-text-14-extra club-countdown-ticket\"" + (timeCell.StartsWith("data") ? " " + timeCell + "></div>" : ">end</div>") + "</div></div></a></figure></header>" +
+                "<ul class=\"club-tag-list\"><li><a class=\"club-tag club-tag--status-live\" href=\"https://community.skin.club/en/quizzes/" + slug + "\">live</a></li><li><a class=\"club-tag\" href=\"https://community.skin.club/en/quizzes\">Quizzes</a></li><li><div class=\"club-tag club-tag--date\">Nov 05</div></li></ul>" +
+                // The site wraps the title in <h2> on some cards and in a <div> on others.
+                (slug.StartsWith("road") ? "<div class=\"club-h5-title-mod-xs\"> <a class=\"club-link-primary\" href=\"https://community.skin.club/en/quizzes/" + slug + "\">" + quizTitle + "</a> </div>"
+                    : "<h2 class=\"club-h5\"> <a class=\"club-hover-connect\" href=\"https://community.skin.club/en/quizzes/" + slug + "\">" + quizTitle + "</a> </h2>") + "</article></div>";
+        };
+        string quizPage = "<html><body><a href=\"https://community.skin.club/en/quizzes/road-to-singapore-major\">Quiz</a><main>" +
+            quizCard("road-to-singapore-major", "Road to Singapore Major Quiz", "126", "data-countdown-ticket=\"2026-12-13T23:59:00Z\"") +
+            quizCard("gamerlegion-prove-youre-a-fan", "GamerLegion: Prove You&#8217;re a Fan", "1,492", "data-countdown-ticket=\"2026-11-11T23:59:00Z\"") +
+            quizCard("are-you-a-true-shox-fan", "Are You a True SHOX Fan?", "810", "end") +
+            "<a href=\"https://community.skin.club/en/quizzes/page/2\">2</a></main></body></html>";
+        List<GiveawayItem> parsedQuizzes = Scanner.ParseQuizList(quizPage, quizNow);
+        Check(parsedQuizzes.Count == 3 && parsedQuizzes[0].Creator == "Road to Singapore Major Quiz" &&
+              parsedQuizzes[0].Url == "https://community.skin.club/en/quizzes/road-to-singapore-major" && parsedQuizzes[0].Ticket == "126" &&
+              parsedQuizzes[0].Status == "active" && parsedQuizzes[0].Deadline.StartsWith("DEC 1") && parsedQuizzes[0].Deadline.EndsWith("2026"),
+            "A live quiz is read with its link, title, participants and end date");
+        Check(parsedQuizzes[1].Status == "ended" && parsedQuizzes[1].Deadline == "Ended" && parsedQuizzes[1].Ticket == "1492" && parsedQuizzes[1].Creator.Contains("You’re"),
+            "A quiz whose end time has passed counts as closed");
+        Check(parsedQuizzes[2].Status == "ended" && parsedQuizzes[2].Deadline == "Ended" && parsedQuizzes[2].Ticket == "810", "A closed quiz is read as ended");
+        Check(Scanner.QuizFirstPrize("<html><body><h2>quiz prizes</h2><div>1st place</div><div>Huntsman Knife Tiger Tooth Factory New</div><div>2nd place</div><div>Driver Gloves</div></body></html>") == "Huntsman Knife Tiger Tooth Factory New" &&
+              Scanner.QuizFirstPrize("<html><body>quiz prizes <p>1st place</p><p>AK-47 Redline Field-Tested</p><p>2nd - 4th places</p><p>Glock-18</p></body></html>") == "AK-47 Redline Field-Tested" &&
+              Scanner.QuizFirstPrize("<html><body>no prizes here</body></html>") == "-", "A quiz's 1st-place prize is read from its page");
 
         // Deposits are shown as USD in one form: "2$".
         Check(Scanner.UsdAmount("US$2") == "2$" && Scanner.UsdAmount("US$$2") == "2$" && Scanner.UsdAmount("$10") == "10$" &&
@@ -420,6 +455,22 @@ static class RegressionTests
             { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(Path.Combine(folder, "logs-window.png")); }
             ((Button)Field(form, "activeButton")).PerformClick();
             Check(grid.Visible && grid.Rows.Count == 2, "Leaving Logs restores giveaway navigation");
+
+            // The Quizzes tab lists quizzes with their own columns; Creator (formerly Active) restores the giveaway columns.
+            Check(((Button)Field(form, "activeButton")).Text == "Creator", "The first tab is called Creator");
+            data.Quizzes.Add(new GiveawayItem { Creator = "Closed Quiz", Url = "https://community.skin.club/en/quizzes/closed", Status = "ended", Ticket = "810", PrizePool = "-", Deadline = "Ended" });
+            data.Quizzes.Add(new GiveawayItem { Creator = "Live Quiz", Url = "https://community.skin.club/en/quizzes/live", Status = "active", Ticket = "126", PrizePool = "Huntsman Knife", Deadline = DateTime.Now.AddDays(9).ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant() });
+            ((Button)Field(form, "quizzesButton")).PerformClick();
+            Check(grid.Rows.Count == 2 && ((GiveawayItem)grid.Rows[0].Tag).Creator == "Live Quiz" && ((Button)Field(form, "quizzesButton")).Text == "Quizzes",
+                "Quizzes tab lists the quizzes, live ones first");
+            Check(!grid.Columns["PromoCode"].Visible && !grid.Columns["MinimumDeposit"].Visible && !grid.Columns["JoinedAction"].Visible &&
+                  grid.Columns["Creator"].HeaderText == "QUIZ" && grid.Columns["Ticket"].HeaderText == "PEOPLE" && grid.Columns["PrizePool"].HeaderText == "1ST PRIZE",
+                "Quizzes tab shows quiz columns and hides promocode, deposit and join");
+            using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
+            { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(Path.Combine(folder, "quizzes-window.png")); }
+            ((Button)Field(form, "activeButton")).PerformClick();
+            Check(grid.Rows.Count == 2 && grid.Columns["PromoCode"].Visible && grid.Columns["JoinedAction"].Visible && grid.Columns["Creator"].HeaderText == "CREATOR" && grid.Columns["Creator"].Width == 180,
+                "Leaving Quizzes restores the giveaway columns");
         }
         for (int n = 0; n < 2100; n++) ActivityLog.Write("TEST", "Bounded entry " + n);
         long logVersion = -1;

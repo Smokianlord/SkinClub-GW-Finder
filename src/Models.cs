@@ -46,12 +46,17 @@ namespace SkinClubGiveawayDesktop
     public class AppData
     {
         public List<GiveawayItem> Items { get; set; }
+        // SkinClub community quizzes (community.skin.club/en/quizzes). Each one reuses GiveawayItem:
+        // Creator = quiz title, Ticket = number of participants, PrizePool = 1st-place prize,
+        // Deadline = end date or "Ended", Status = "active" (live) or "ended" (closed).
+        public List<GiveawayItem> Quizzes { get; set; }
         public string LastScan { get; set; }
         public string LastDeepScan { get; set; }
 
         public AppData()
         {
             Items = new List<GiveawayItem>();
+            Quizzes = new List<GiveawayItem>();
         }
     }
 

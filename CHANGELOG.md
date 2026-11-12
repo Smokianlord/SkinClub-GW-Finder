@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.3.0] - 2026-11-12
+
+- New **Quizzes** tab: the SkinClub community quizzes (community.skin.club/en/quizzes) with link, 1st-place prize (live quizzes), participants and end date; live quizzes first. The list is updated by Refresh, Deep Search and the automatic checks.
+- The **Active** tab is now called **Creator**.
+- Fixed: giveaways whose entry code carries a different date than their link (for example `joispoi.club/021126` with `LP-JOISPOI24-011126`, `theasylum.club/011126` with `LP-ASYLUM-011226`) were saved without promocode and deposit. Any dated entry code is now accepted; the undated discount code is still ignored.
+
 ## [2.2.0] - 2026-11-10
 
 - Closing the window now keeps the app running in the system tray, still checking for giveaways. The tray icon's menu has Open, Deep Search, Refresh, Joined giveaways and Exit; a search started from the tray reports its result in a tray pop-up. Exit really closes the app.

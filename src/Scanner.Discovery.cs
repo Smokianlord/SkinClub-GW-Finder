@@ -429,6 +429,8 @@ namespace SkinClubGiveawayDesktop
                 }
                 MergeItems(data, useful);
                 await FillMissingPrizePoolsAsync(data);
+                phase = "Deep Search: reading quizzes";
+                await RefreshQuizzesAsync(data);
                 data.LastScan = DateTime.UtcNow.ToString("o");
                 data.LastDeepScan = data.LastScan;
                 DataStore.Save(data);

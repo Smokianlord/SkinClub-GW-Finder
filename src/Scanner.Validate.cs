@@ -200,6 +200,8 @@ namespace SkinClubGiveawayDesktop
                 current.RenderedAt = s.RenderedAt;
                 current.HistorySince = s.HistorySince;
             }
+            // The quiz list is replaced as a whole (the user never edits it).
+            if (scanned.Quizzes != null && scanned.Quizzes.Count > 0) live.Quizzes = scanned.Quizzes;
             live.LastScan = scanned.LastScan;
             live.LastDeepScan = scanned.LastDeepScan;
         }
@@ -360,6 +362,8 @@ namespace SkinClubGiveawayDesktop
                 GiveawayItem[] updates = tasks.Count == 0 ? new GiveawayItem[0] : await Task.WhenAll(tasks);
                 MergeItems(data, updates);
                 await FillMissingPrizePoolsAsync(data);
+                phase = "Refresh: reading quizzes";
+                await RefreshQuizzesAsync(data);
                 data.LastScan = DateTime.UtcNow.ToString("o");
                 DataStore.Save(data);
                 ActivityLog.Write("SCAN", "Refresh complete; " + updates.Length + " pages checked");

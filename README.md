@@ -19,7 +19,8 @@ A Windows desktop app that finds SkinClub creator giveaways, checks each one, an
 - **Every page is checked** before it is added, and pages that do not answer are tried again instead of being skipped.
 
 ### Keeping them organised
-- **Active, Joined and History tabs.** Press **+** to move a giveaway to Joined; press **×** there to send it back.
+- **Creator, Joined and History tabs.** Creator lists the running creator giveaways. Press **+** to move one to Joined; press **×** there to send it back.
+- **Quizzes tab:** every SkinClub community quiz with its link, 1st-place prize, number of participants and end date, live quizzes first.
 - **History** keeps ended giveaways, newest first, with their promocode and deposit.
 - **Stats strip:** active giveaways and tickets left, giveaways ending within 48 hours, joined giveaways, and the cheapest entry.
 - **Sort** any column (prize pools and deposits by amount) and **search** by creator, link, prize pool, tickets, promocode, deposit or deadline (Ctrl+F).
