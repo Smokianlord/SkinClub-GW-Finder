@@ -1190,6 +1190,18 @@ namespace SkinClubGiveawayDesktop
                     }
                 case "Deadline":
                     {
+                        DateTime quizEnd;
+                        if (showingQuizzes && ended && TryQuizEnd(item, out quizEnd))
+                        {
+                            // A closed quiz: the date it ended and how long ago.
+                            DateTime local = quizEnd.ToLocalTime();
+                            int ago = (DateTime.Now.Date - local.Date).Days;
+                            string when = ago <= 0 ? "ended today" : ago == 1 ? "ended yesterday" : ago + " days ago";
+                            TextRenderer.DrawText(g, local.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant(),
+                                numberFont, new Rectangle(text.X, cb.Y + 8, text.Width, 22), Ui.Muted, Ui.Single);
+                            TextRenderer.DrawText(g, when, smallFont, new Rectangle(text.X, cb.Y + 30, text.Width, 18), ago <= 1 ? Ui.TextSoft : Ui.Mix(Ui.Muted, Ui.Bg, 0.2), Ui.Single);
+                            break;
+                        }
                         if (missing) { TextRenderer.DrawText(g, "\u2013", cellFont, text, Ui.Muted, Ui.Single); break; }
                         Color tone = fore;
                         string left = null;
@@ -1476,6 +1488,13 @@ namespace SkinClubGiveawayDesktop
         private int CompareItems(GiveawayItem a, GiveawayItem b)
         {
             int cmp = 0;
+            if (showingQuizzes && string.Equals(sortColumn, "Deadline", StringComparison.OrdinalIgnoreCase))
+            {
+                // Live quizzes first (ending soonest on top), then closed ones from the most recently ended
+                // to the oldest. Clicking the header reverses the whole list.
+                int order = QuizTimelineOrder(a, b);
+                return sortAscending ? order : -order;
+            }
             if (showingQuizzes && string.Equals(sortColumn, "Ticket", StringComparison.OrdinalIgnoreCase))
             {
                 long ap, bp;
@@ -1554,6 +1573,28 @@ namespace SkinClubGiveawayDesktop
             cmp = sortAscending ? cmp : -cmp;
             // Same value in the sorted column: show a creator's newest giveaway first.
             if (cmp == 0) cmp = GiveawayInfo.GiveawayDate(b.Url).CompareTo(GiveawayInfo.GiveawayDate(a.Url));
+            return cmp;
+        }
+
+        internal static bool TryQuizEnd(GiveawayItem quiz, out DateTime endUtc)
+        {
+            endUtc = DateTime.MinValue;
+            return quiz != null && !string.IsNullOrWhiteSpace(quiz.EndsAt) &&
+                DateTime.TryParse(quiz.EndsAt, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out endUtc);
+        }
+
+        internal static int QuizTimelineOrder(GiveawayItem a, GiveawayItem b)
+        {
+            bool aLive = string.Equals(a.Status, "active", StringComparison.OrdinalIgnoreCase);
+            bool bLive = string.Equals(b.Status, "active", StringComparison.OrdinalIgnoreCase);
+            if (aLive != bLive) return aLive ? -1 : 1;
+            DateTime ae, be;
+            bool ah = TryQuizEnd(a, out ae), bh = TryQuizEnd(b, out be);
+            if (ah != bh) return ah ? -1 : 1; // an unknown end time goes to the bottom of its group
+            int cmp = 0;
+            if (ah && bh) cmp = aLive ? ae.CompareTo(be) : be.CompareTo(ae);
+            if (cmp == 0) cmp = string.Compare(a.Url ?? "", b.Url ?? "", StringComparison.OrdinalIgnoreCase); // never by name
             return cmp;
         }
 
@@ -1924,7 +1965,8 @@ namespace SkinClubGiveawayDesktop
                         clone.Quizzes.Add(new GiveawayItem
                         {
                             Creator = q.Creator, Url = q.Url, Status = q.Status, Ticket = q.Ticket, PromoCode = q.PromoCode,
-                            MinimumDeposit = q.MinimumDeposit, PrizePool = q.PrizePool, Deadline = q.Deadline, LastChecked = q.LastChecked, Source = q.Source
+                            MinimumDeposit = q.MinimumDeposit, PrizePool = q.PrizePool, Deadline = q.Deadline, LastChecked = q.LastChecked, Source = q.Source,
+                            EndsAt = q.EndsAt
                         });
             return clone;
         }

@@ -38,6 +38,9 @@ namespace SkinClubGiveawayDesktop
         public string JoinedAt { get; set; }
         public string HistorySince { get; set; }
         public string RenderedAt { get; set; }
+        // Quizzes only: when the quiz ends or ended, as an ISO UTC time. Used to order closed quizzes
+        // from the most recently ended to the oldest.
+        public string EndsAt { get; set; }
         // Set when a check failed to read the page at all; never saved.
         [System.Web.Script.Serialization.ScriptIgnore]
         public bool Unreachable { get; set; }

@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.3.1] - 2026-11-13
+
+- Fixed: closed quizzes were listed alphabetically, so a quiz that had just ended could land anywhere. Each quiz's real end time is now saved (closed quizzes read it once from their own page), and the Quizzes tab lists live quizzes first, then closed ones from the most recently ended to the oldest. Closed quizzes show their end date and "ended today", "ended yesterday" or "N days ago".
+
 ## [2.3.0] - 2026-11-12
 
 - New **Quizzes** tab: the SkinClub community quizzes (community.skin.club/en/quizzes) with link, 1st-place prize (live quizzes), participants and end date; live quizzes first. The list is updated by Refresh, Deep Search and the automatic checks.

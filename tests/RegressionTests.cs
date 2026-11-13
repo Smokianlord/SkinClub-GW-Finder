@@ -269,6 +269,11 @@ static class RegressionTests
         Check(parsedQuizzes[1].Status == "ended" && parsedQuizzes[1].Deadline == "Ended" && parsedQuizzes[1].Ticket == "1492" && parsedQuizzes[1].Creator.Contains("You’re"),
             "A quiz whose end time has passed counts as closed");
         Check(parsedQuizzes[2].Status == "ended" && parsedQuizzes[2].Deadline == "Ended" && parsedQuizzes[2].Ticket == "810", "A closed quiz is read as ended");
+        Check(parsedQuizzes[1].EndsAt == new DateTime(2026, 11, 11, 23, 59, 0, DateTimeKind.Utc).ToString("o") && parsedQuizzes[2].EndsAt == null,
+            "A quiz card's exact end time is kept, also after it has passed");
+        Check(Scanner.QuizEndFromPage("<html><body><div>starts</div><div>2026-10-15</div><div>ends</div><div>2026-11-12</div></body></html>") == new DateTime(2026, 11, 12, 23, 59, 0, DateTimeKind.Utc).ToString("o") &&
+              Scanner.QuizEndFromPage("<html><body><b data-countdown-ticket=\"2026-12-13T23:59:00Z\"></b> ends 2026-12-13</body></html>") == new DateTime(2026, 12, 13, 23, 59, 0, DateTimeKind.Utc).ToString("o") &&
+              Scanner.QuizEndFromPage("<html><body>nothing</body></html>") == null, "A closed quiz's end date is read from its own page");
         Check(Scanner.QuizFirstPrize("<html><body><h2>quiz prizes</h2><div>1st place</div><div>Huntsman Knife Tiger Tooth Factory New</div><div>2nd place</div><div>Driver Gloves</div></body></html>") == "Huntsman Knife Tiger Tooth Factory New" &&
               Scanner.QuizFirstPrize("<html><body>quiz prizes <p>1st place</p><p>AK-47 Redline Field-Tested</p><p>2nd - 4th places</p><p>Glock-18</p></body></html>") == "AK-47 Redline Field-Tested" &&
               Scanner.QuizFirstPrize("<html><body>no prizes here</body></html>") == "-", "A quiz's 1st-place prize is read from its page");
@@ -466,6 +471,19 @@ static class RegressionTests
             Check(!grid.Columns["PromoCode"].Visible && !grid.Columns["MinimumDeposit"].Visible && !grid.Columns["JoinedAction"].Visible &&
                   grid.Columns["Creator"].HeaderText == "QUIZ" && grid.Columns["Ticket"].HeaderText == "PEOPLE" && grid.Columns["PrizePool"].HeaderText == "1ST PRIZE",
                 "Quizzes tab shows quiz columns and hides promocode, deposit and join");
+            // Order: live (ending soonest first), then closed from the most recently ended to the oldest, never by name.
+            data.Quizzes.Clear();
+            DateTime u = DateTime.UtcNow;
+            data.Quizzes.Add(new GiveawayItem { Creator = "Aaa Old Closed", Url = "https://community.skin.club/en/quizzes/a", Status = "ended", Ticket = "1", Deadline = "Ended", EndsAt = u.AddDays(-40).ToString("o") });
+            data.Quizzes.Add(new GiveawayItem { Creator = "Zzz Ended Today", Url = "https://community.skin.club/en/quizzes/z", Status = "ended", Ticket = "2", Deadline = "Ended", EndsAt = u.AddHours(-4).ToString("o") });
+            data.Quizzes.Add(new GiveawayItem { Creator = "Mmm Ended Last Week", Url = "https://community.skin.club/en/quizzes/m", Status = "ended", Ticket = "3", Deadline = "Ended", EndsAt = u.AddDays(-7).ToString("o") });
+            data.Quizzes.Add(new GiveawayItem { Creator = "Bbb Live Later", Url = "https://community.skin.club/en/quizzes/b", Status = "active", Ticket = "4", Deadline = "-", EndsAt = u.AddDays(30).ToString("o") });
+            data.Quizzes.Add(new GiveawayItem { Creator = "Yyy Live Soon", Url = "https://community.skin.club/en/quizzes/y", Status = "active", Ticket = "5", Deadline = "-", EndsAt = u.AddDays(2).ToString("o") });
+            Call(form, "Render");
+            Func<string> quizOrder = () => string.Join(",", grid.Rows.Cast<DataGridViewRow>().Select(r => ((GiveawayItem)r.Tag).Creator.Substring(0, 3)).ToArray());
+            Check(quizOrder() == "Yyy,Bbb,Zzz,Mmm,Aaa", "Quizzes: live ending soonest first, then the quiz that ended most recently, down to the oldest");
+            Call(form, "Render");
+            Check(quizOrder() == "Yyy,Bbb,Zzz,Mmm,Aaa", "Quiz order stays the same after a refresh");
             using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
             { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(Path.Combine(folder, "quizzes-window.png")); }
             ((Button)Field(form, "activeButton")).PerformClick();

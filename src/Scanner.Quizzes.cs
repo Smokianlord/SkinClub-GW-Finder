@@ -69,13 +69,15 @@ namespace SkinClubGiveawayDesktop
 
                 bool live = !QuizClosedRegex.IsMatch(block);
                 string deadline = "Ended";
+                string endsAt = null;
                 Match end = QuizEndRegex.Match(block);
                 DateTime ends;
-                if (live && end.Success && DateTime.TryParse(end.Groups[1].Value, CultureInfo.InvariantCulture,
+                if (end.Success && DateTime.TryParse(end.Groups[1].Value, CultureInfo.InvariantCulture,
                         DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out ends))
                 {
+                    endsAt = ends.ToString("o");
                     if (ends <= nowUtc) live = false;
-                    else deadline = ends.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.InvariantCulture).ToUpperInvariant();
+                    else if (live) deadline = ends.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.InvariantCulture).ToUpperInvariant();
                 }
                 else if (live) deadline = "-"; // live, but the page gives no end time
 
@@ -83,10 +85,29 @@ namespace SkinClubGiveawayDesktop
                 {
                     Creator = name.Length == 0 ? "Quiz" : name, Url = url, Status = live ? "active" : "ended",
                     Ticket = count.Length == 0 ? "-" : count, PromoCode = "-", MinimumDeposit = "-", PrizePool = "-",
-                    Deadline = deadline, Source = "quiz", LastChecked = nowUtc.ToString("o")
+                    Deadline = deadline, EndsAt = endsAt, Source = "quiz", LastChecked = nowUtc.ToString("o")
                 });
             }
             return quizzes;
+        }
+
+        private static readonly Regex QuizEndsDateRegex = new Regex(@"\bends\s+(\d{4}-\d{2}-\d{2})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // When a quiz ends, from its own page: the exact countdown time while it is live, otherwise the
+        // "ends 2026-11-12" date, at 23:59 UTC like every quiz the site shows with a time.
+        internal static string QuizEndFromPage(string html)
+        {
+            if (string.IsNullOrEmpty(html)) return null;
+            DateTime when;
+            Match exact = QuizEndRegex.Match(html);
+            if (exact.Success && DateTime.TryParse(exact.Groups[1].Value, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out when))
+                return when.ToString("o");
+            Match day = QuizEndsDateRegex.Match(HtmlToText(html).Replace('\n', ' '));
+            if (day.Success && DateTime.TryParseExact(day.Groups[1].Value + " 23:59", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out when))
+                return when.ToString("o");
+            return null;
         }
 
         // "1st place Huntsman Knife Tiger Tooth Factory New 2nd place ..." on a quiz's own page.
@@ -122,7 +143,8 @@ namespace SkinClubGiveawayDesktop
                 }
                 if (found.Count == 0) { ActivityLog.Write("WARN", "No quizzes found on the quizzes page; keeping the saved quizzes"); return; }
 
-                // Keep prizes already known; read the prize page only for live quizzes that lack one.
+                // Keep prizes and end times already known. A quiz's own page is read only when its end time
+                // is still unknown (closed quizzes, once) or a live quiz has no prize yet.
                 Dictionary<string, GiveawayItem> old = new Dictionary<string, GiveawayItem>(StringComparer.OrdinalIgnoreCase);
                 if (data.Quizzes != null) foreach (GiveawayItem q in data.Quizzes) if (q != null && q.Url != null) old[q.Url] = q;
                 List<Task> prizeReads = new List<Task>();
@@ -130,8 +152,14 @@ namespace SkinClubGiveawayDesktop
                 foreach (GiveawayItem quiz in found)
                 {
                     GiveawayItem known;
-                    if (old.TryGetValue(quiz.Url, out known) && HasValue(known.PrizePool)) { quiz.PrizePool = known.PrizePool; continue; }
-                    if (quiz.Status != "active") continue;
+                    if (old.TryGetValue(quiz.Url, out known))
+                    {
+                        if (HasValue(known.PrizePool)) quiz.PrizePool = known.PrizePool;
+                        if (string.IsNullOrWhiteSpace(quiz.EndsAt)) quiz.EndsAt = known.EndsAt;
+                    }
+                    bool needPrize = quiz.Status == "active" && !HasValue(quiz.PrizePool);
+                    bool needEnd = string.IsNullOrWhiteSpace(quiz.EndsAt);
+                    if (!needPrize && !needEnd) continue;
                     GiveawayItem target = quiz;
                     prizeReads.Add(Task.Run(async delegate
                     {
@@ -139,7 +167,11 @@ namespace SkinClubGiveawayDesktop
                         try
                         {
                             PageFetch detail = await FetchPageAsync(target.Url, MaxDiscoveryBytes, false);
-                            if (detail.Body != null) target.PrizePool = QuizFirstPrize(detail.Body);
+                            if (detail.Body != null)
+                            {
+                                if (needPrize) target.PrizePool = QuizFirstPrize(detail.Body);
+                                if (needEnd) target.EndsAt = QuizEndFromPage(detail.Body);
+                            }
                         }
                         catch (Exception ex) { Diag.Swallow("Reading the prizes of " + target.Url, ex); }
                         finally { gate.Release(); }
